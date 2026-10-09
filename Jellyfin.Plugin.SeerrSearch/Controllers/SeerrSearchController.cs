@@ -363,11 +363,14 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return new JsonResult(new { ok = false, error = "bad-key", code = (int)users.StatusCode });
             }
 
+            // The test button should show the real answer, not the one cached from before the last change.
+            await _sso.ProbeNowAsync().ConfigureAwait(false);
+
             _userMap.Invalidate();
             await _userMap.RefreshAsync(ct).ConfigureAwait(false);
 
             var importable = await _seerr.GetImportableJellyfinUserIdsAsync(ct).ConfigureAwait(false);
-            var unlinked = importable.Count(id => !_userMap.IsMapped(id));
+            int? unlinked = importable?.Count(id => !_userMap.IsMapped(id));
 
             return new JsonResult(new
             {
@@ -399,9 +402,13 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             _userMap.Invalidate();
             await _userMap.RefreshAsync(ct).ConfigureAwait(false);
 
-            var missing = (await _seerr.GetImportableJellyfinUserIdsAsync(ct).ConfigureAwait(false))
-                .Where(id => !_userMap.IsMapped(id))
-                .ToList();
+            var importable = await _seerr.GetImportableJellyfinUserIdsAsync(ct).ConfigureAwait(false);
+            if (importable == null)
+            {
+                return StatusCode((int)HttpStatusCode.BadGateway, new { ok = false, error = "seerr-error" });
+            }
+
+            var missing = importable.Where(id => !_userMap.IsMapped(id)).ToList();
 
             if (missing.Count == 0)
             {

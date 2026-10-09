@@ -90,6 +90,9 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { id: 1 }, { 'Set-Cookie': `connect.sid=mock-${r.json.User.Id}; Path=/; HttpOnly` });
   }
 
+  // The plugin's own ping, as if Seerr's reverse proxy relayed /SeerrSearch/ to Jellyfin
+  if (path === '/SeerrSearch/ping') return send(res, 200, 'seerr-search-ok');
+
   if (!path.startsWith('/api/v1/')) return send(res, 404, { message: 'not found' });
   const api = path.slice('/api/v1'.length);
 

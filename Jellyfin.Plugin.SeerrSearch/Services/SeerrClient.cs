@@ -201,21 +201,26 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             return users;
         }
 
-        /// <summary>The Jellyfin accounts Seerr can import (ids without dashes), as Seerr lists them.</summary>
-        public async Task<IReadOnlyList<string>> GetImportableJellyfinUserIdsAsync(CancellationToken ct = default)
+        /// <summary>
+        /// The Jellyfin accounts Seerr can import (ids without dashes), as Seerr lists them,
+        /// or null when Seerr could not be asked.
+        /// </summary>
+        public async Task<IReadOnlyList<string>?> GetImportableJellyfinUserIdsAsync(CancellationToken ct = default)
         {
             var response = await GetAsync("/settings/jellyfin/users", null, ct).ConfigureAwait(false);
-            var ids = new List<string>();
 
-            if (response.IsSuccess && response.AsNode() is JsonArray array)
+            if (!response.IsSuccess || response.AsNode() is not JsonArray array)
             {
-                foreach (var item in array)
+                return null;
+            }
+
+            var ids = new List<string>();
+            foreach (var item in array)
+            {
+                var id = item?["id"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(id))
                 {
-                    var id = item?["id"]?.GetValue<string>();
-                    if (!string.IsNullOrWhiteSpace(id))
-                    {
-                        ids.Add(id);
-                    }
+                    ids.Add(id);
                 }
             }
 

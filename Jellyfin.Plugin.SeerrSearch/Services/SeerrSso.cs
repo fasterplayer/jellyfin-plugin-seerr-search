@@ -50,6 +50,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         private readonly ConcurrentDictionary<string, Ticket> _tickets = new(StringComparer.Ordinal);
 
         private bool _proxyMode;
+        private int _probing;
         private DateTime _probedUtc = DateTime.MinValue;
 
         public SeerrSso(
@@ -65,33 +66,79 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             if (Plugin.Instance != null)
             {
-                Plugin.Instance.ConfigurationChanged += (_, _) => _probedUtc = DateTime.MinValue;
+                Plugin.Instance.ConfigurationChanged += (_, _) =>
+                {
+                    _proxyMode = false;
+                    _probedUtc = DateTime.MinValue;
+                    StartProbe();
+                };
             }
+
+            // Warm the answer up so that the first user does not see the default.
+            StartProbe();
         }
 
         public static string PublicSeerrHostName => PublicSeerrHost;
 
         public static string PublicJellyfinHostName => PublicJellyfinHost;
 
-        /// <summary>True when Seerr's public host forwards /SeerrSearch/ to this server.</summary>
+        /// <summary>
+        /// True when Seerr's public host forwards /SeerrSearch/ to this server. The answer comes from a
+        /// probe that runs in the background (at start, after a configuration change and every ten minutes):
+        /// a request never waits for it, even if the public host is slow or unreachable from the server.
+        /// </summary>
         public bool ProxyMode
         {
             get
             {
-                if (DateTime.UtcNow - _probedUtc < ProbeTtl)
+                if (DateTime.UtcNow - _probedUtc >= ProbeTtl)
                 {
-                    return _proxyMode;
+                    StartProbe();
                 }
 
-                _probedUtc = DateTime.UtcNow;
-                _proxyMode = Probe();
                 return _proxyMode;
             }
         }
 
-        private bool Probe()
+        private void StartProbe()
         {
-            var publicUrl = UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl);
+            if (Interlocked.Exchange(ref _probing, 1) == 1)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await ProbeNowAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Never let a background probe fault: the answer simply stays as it was.
+                }
+                finally
+                {
+                    Volatile.Write(ref _probing, 0);
+                }
+            });
+        }
+
+        /// <summary>Probes now and stores the answer, unless the public URL changed in the meantime (then the next call probes again).</summary>
+        public async Task ProbeNowAsync()
+        {
+            var url = UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl);
+            var result = await ProbeAsync(url).ConfigureAwait(false);
+
+            if (url == UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl))
+            {
+                _proxyMode = result;
+                _probedUtc = DateTime.UtcNow;
+            }
+        }
+
+        private async Task<bool> ProbeAsync(string publicUrl)
+        {
             if (string.IsNullOrEmpty(publicUrl))
             {
                 return false;
@@ -102,7 +149,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 var client = _httpClientFactory.CreateClient(SeerrClient.NamedClient);
                 client.Timeout = TimeSpan.FromSeconds(8);
                 client.MaxResponseContentBufferSize = 4096;
-                var body = client.GetStringAsync(publicUrl + "/" + Plugin.PluginRoute + "/ping").GetAwaiter().GetResult();
+                var body = await client.GetStringAsync(publicUrl + "/" + Plugin.PluginRoute + "/ping").ConfigureAwait(false);
                 var ok = body.Trim() == PingBody;
                 _logger.LogInformation("Seerr Search: /SeerrSearch/ relay on Seerr's host is {State}.", ok ? "present" : "absent");
                 return ok;
