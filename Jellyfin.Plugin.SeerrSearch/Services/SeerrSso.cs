@@ -11,30 +11,28 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SeerrSearch.Services
 {
     /// <summary>
-    /// Connexion automatique à Seerr depuis un lien Jellyfin.
+    /// Automatic sign-in to Seerr from a Jellyfin link.
     ///
-    /// Le problème : une session Seerr est un cookie sur le domaine de Seerr, et
-    /// un navigateur qui arrive depuis Jellyfin n'en a pas. Seerr n'accepte ni
-    /// jeton Jellyfin ni paramètre d'URL, et un cookie SameSite ne peut être
-    /// déposé que par une navigation de premier niveau — pas par un fetch, pas
-    /// par un iframe.
+    /// The problem: a Seerr session is a cookie on Seerr's own domain, and a browser
+    /// arriving from Jellyfin has none. Seerr accepts neither a Jellyfin token nor a URL
+    /// parameter, and a SameSite cookie can only be set by a top-level navigation — not by
+    /// a fetch, not by an iframe.
     ///
-    /// La solution, dans les deux cas : le navigateur, authentifié, demande un
-    /// billet à usage unique, puis navigue vers /SeerrSearch/sso?t=billet. Le
-    /// plugin fait le Quick Connect côté serveur — initie chez Seerr, autorise
-    /// le code pour cet utilisateur via IQuickConnect, termine chez Seerr —,
-    /// reçoit le cookie de session de Seerr, le redépose dans la réponse et
-    /// redirige vers Seerr, qui reconnaît la session. Aucun mot de passe.
+    /// The solution, in both modes: the authenticated browser asks for a one-time ticket,
+    /// then navigates to /SeerrSearch/sso?t=ticket. The plugin runs Quick Connect on the
+    /// server side — initiates it at Seerr, authorizes the code for that user through
+    /// IQuickConnect, completes it at Seerr —, receives Seerr's session cookie, sets it in
+    /// its own response and redirects to Seerr, which recognizes the session. No password.
     ///
-    /// Où le cookie est déposé dépend du mode :
-    ///   - Mode relais (préféré) : le proxy devant Seerr envoie
-    ///     seerr.x.ca/SeerrSearch/sso au serveur Jellyfin. Le cookie est alors
-    ///     déposé par l'hôte de Seerr lui-même, identique à celui que Seerr
-    ///     pose — rien à distinguer, rien qui traîne après une déconnexion.
-    ///     Détecté automatiquement : seerr.x.ca/SeerrSearch/ping répond.
-    ///   - Mode domaine : Jellyfin et Seerr partagent un domaine parent
-    ///     (jellyfin.x.ca et seerr.x.ca); le cookie est déposé par Jellyfin
-    ///     avec Domain=x.ca, que le navigateur envoie aussi à Seerr.
+    /// Where the cookie is set depends on the mode:
+    ///   - Relay mode (preferred): the proxy in front of Seerr forwards
+    ///     seerr.example.com/SeerrSearch/sso to the Jellyfin server. The cookie is then set by
+    ///     Seerr's own host, identical to the one Seerr would set — nothing to tell apart,
+    ///     nothing left behind after a sign-out. Detected automatically:
+    ///     seerr.example.com/SeerrSearch/ping answers.
+    ///   - Domain mode: Jellyfin and Seerr share a parent domain (jellyfin.example.com and
+    ///     seerr.example.com); the cookie is set by Jellyfin with Domain=example.com, which
+    ///     the browser also sends to Seerr.
     /// </summary>
     public class SeerrSso
     {
@@ -75,7 +73,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         public static string PublicJellyfinHostName => PublicJellyfinHost;
 
-        /// <summary>Vrai si l'hôte public de Seerr relaie /SeerrSearch/ vers ce serveur.</summary>
+        /// <summary>True when Seerr's public host forwards /SeerrSearch/ to this server.</summary>
         public bool ProxyMode
         {
             get
@@ -93,7 +91,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         private bool Probe()
         {
-            var publicUrl = (Plugin.Instance?.Configuration.SeerrPublicUrl ?? string.Empty).TrimEnd('/');
+            var publicUrl = UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl);
             if (string.IsNullOrEmpty(publicUrl))
             {
                 return false;
@@ -103,9 +101,10 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             {
                 var client = _httpClientFactory.CreateClient(SeerrClient.NamedClient);
                 client.Timeout = TimeSpan.FromSeconds(8);
+                client.MaxResponseContentBufferSize = 4096;
                 var body = client.GetStringAsync(publicUrl + "/" + Plugin.PluginRoute + "/ping").GetAwaiter().GetResult();
                 var ok = body.Trim() == PingBody;
-                _logger.LogInformation("Seerr Search : relais /SeerrSearch/ sur l'hôte de Seerr — {State}.", ok ? "présent" : "absent");
+                _logger.LogInformation("Seerr Search: /SeerrSearch/ relay on Seerr's host is {State}.", ok ? "present" : "absent");
                 return ok;
             }
             catch (Exception)
@@ -122,7 +121,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         private static string PublicSeerrHost => HostOf(Plugin.Instance?.Configuration.SeerrPublicUrl);
 
-        /// <summary>Domaine parent commun aux deux hôtes publics, ou vide si le SSO n'est pas possible.</summary>
+        /// <summary>Parent domain shared by the two public hosts, or empty when automatic sign-in is not possible.</summary>
         public static string CookieDomain
         {
             get
@@ -144,7 +143,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 var lb = b.Split('.').Reverse().ToArray();
                 var common = la.Zip(lb).TakeWhile(p => string.Equals(p.First, p.Second, StringComparison.OrdinalIgnoreCase)).Count();
 
-                // Il faut au moins « domaine.tld » en commun; un seul label (ex. « ca ») ne suffit pas.
+                // At least "domain.tld" in common; a single label (e.g. "com") is not enough.
                 return common >= 2 ? string.Join('.', la.Take(common).Reverse()) : string.Empty;
             }
         }
@@ -157,21 +156,25 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         public string Mode => !IsReady ? "off" : ProxyMode ? "proxy" : "domain";
 
+        /// <summary>
+        /// Why automatic sign-in is not available, as a stable code (translated by the
+        /// configuration page), or null when it is ready.
+        /// </summary>
         public string? WhyNotReady()
         {
             if (!SeerrClient.IsConfigured)
             {
-                return "URL ou clé API Seerr manquante.";
+                return "seerr-not-configured";
             }
 
             if (string.IsNullOrEmpty(PublicSeerrHost))
             {
-                return "Il manque l'URL publique de Seerr.";
+                return "public-url-missing";
             }
 
             if (!_quickConnect.IsEnabled)
             {
-                return "Le Quick Connect est désactivé dans Jellyfin (Tableau de bord → Général).";
+                return "quickconnect-disabled";
             }
 
             if (ProxyMode)
@@ -181,18 +184,18 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             if (string.IsNullOrEmpty(PublicJellyfinHost))
             {
-                return "Il manque l'URL publique de Jellyfin (ou un relais de /SeerrSearch/ sur l'hôte de Seerr).";
+                return "jellyfin-url-missing";
             }
 
             if (string.IsNullOrEmpty(CookieDomain))
             {
-                return "Les URL publiques de Jellyfin et de Seerr ne partagent pas de domaine parent, et l'hôte de Seerr ne relaie pas /SeerrSearch/.";
+                return "no-common-domain";
             }
 
             return null;
         }
 
-        /// <summary>Crée un billet à usage unique et renvoie l'URL de départ, ou null si le SSO n'est pas prêt.</summary>
+        /// <summary>Creates a one-time ticket and returns the starting URL, or null when automatic sign-in is not ready.</summary>
         public string? IssueTicket(Guid userId, string? to)
         {
             if (!IsReady)
@@ -211,9 +214,9 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             _tickets[id] = new Ticket(userId, target, DateTime.UtcNow + TicketLifetime);
 
-            // En mode relais, le billet s'encaisse sur l'hôte de Seerr; sinon sur celui de Jellyfin.
+            // In relay mode the ticket is redeemed on Seerr's host; otherwise on Jellyfin's.
             var config = Plugin.Instance!.Configuration;
-            var origin = (ProxyMode ? config.SeerrPublicUrl : config.JellyfinPublicUrl).TrimEnd('/');
+            var origin = UrlUtil.Normalize(ProxyMode ? config.SeerrPublicUrl : config.JellyfinPublicUrl);
             return origin + "/" + Plugin.PluginRoute + "/sso?t=" + id;
         }
 
@@ -238,13 +241,13 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         public bool Peek(string? id) =>
             !string.IsNullOrEmpty(id) && _tickets.TryGetValue(id, out var t) && t.ExpiresUtc >= DateTime.UtcNow;
 
-        /// <summary>Le Quick Connect complet, côté serveur, pour cet utilisateur.</summary>
+        /// <summary>The whole Quick Connect flow, on the server side, for this user.</summary>
         public async Task<SignInResult> SignInAsync(Guid userId, CancellationToken ct)
         {
             var initiate = await _seerr.PostAnonymousAsync("/auth/jellyfin/quickconnect/initiate", null, ct).ConfigureAwait(false);
             if (!initiate.IsSuccess)
             {
-                return Fail("Seerr a refusé d'initier le Quick Connect (" + (int)initiate.StatusCode + ").");
+                return Fail("Seerr refused to start Quick Connect (" + (int)initiate.StatusCode + ").");
             }
 
             var node = initiate.AsNode();
@@ -253,51 +256,51 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(secret))
             {
-                return Fail("Réponse d'initiation incomplète.");
+                return Fail("Incomplete initiation response.");
             }
 
             try
             {
                 if (!await _quickConnect.AuthorizeRequest(userId, code).ConfigureAwait(false))
                 {
-                    return Fail("Jellyfin a refusé d'autoriser le code.");
+                    return Fail("Jellyfin refused to authorize the code.");
                 }
             }
             catch (Exception ex)
             {
-                return Fail("Autorisation du code impossible : " + ex.Message);
+                return Fail("Could not authorize the code: " + ex.Message);
             }
 
             var auth = await _seerr.PostAnonymousAsync("/auth/jellyfin/quickconnect/authenticate", new { secret }, ct).ConfigureAwait(false);
             if (!auth.IsSuccess)
             {
-                return Fail("Seerr a refusé la session (" + (int)auth.StatusCode + ") : " + (auth.AsNode()?["message"]?.GetValue<string>() ?? "sans détail"));
+                return Fail("Seerr refused the session (" + (int)auth.StatusCode + "): " + (auth.AsNode()?["message"]?.GetValue<string>() ?? "no detail"));
             }
 
             var sessionCookie = auth.SetCookies.FirstOrDefault(c => c.Contains('=', StringComparison.Ordinal));
             if (sessionCookie == null)
             {
-                return Fail("Seerr n'a pas renvoyé de cookie de session.");
+                return Fail("Seerr did not return a session cookie.");
             }
 
             var nameValue = sessionCookie.Split(';', 2)[0].Trim();
-            var secure = (Plugin.Instance?.Configuration.SeerrPublicUrl ?? string.Empty).StartsWith("https", StringComparison.OrdinalIgnoreCase);
+            var secure = UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl).StartsWith("https", StringComparison.OrdinalIgnoreCase);
 
-            // Mode relais : cookie d'hôte, exactement comme Seerr le poserait.
-            // Mode domaine : cookie de domaine parent, pour qu'il voyage jusqu'à Seerr.
+            // Relay mode: host cookie, exactly as Seerr would set it.
+            // Domain mode: parent-domain cookie, so that it travels to Seerr.
             var header = nameValue
                 + (ProxyMode ? string.Empty : "; Domain=" + CookieDomain)
                 + "; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax"
                 + (secure ? "; Secure" : string.Empty);
 
-            _logger.LogInformation("Seerr Search : session Seerr ouverte par Quick Connect pour l'utilisateur {UserId}.", userId);
+            _logger.LogInformation("Seerr Search: Seerr session opened through Quick Connect for user {UserId}.", userId);
 
             return new SignInResult(true, header, null);
         }
 
         private SignInResult Fail(string message)
         {
-            _logger.LogWarning("Seerr Search SSO : {Message}", message);
+            _logger.LogWarning("Seerr Search SSO: {Message}", message);
             return new SignInResult(false, null, message);
         }
 
@@ -315,12 +318,9 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         private static string HostOf(string? url)
         {
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                return string.Empty;
-            }
+            var normalized = UrlUtil.Normalize(url);
 
-            return Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) ? uri.Host : string.Empty;
+            return normalized.Length > 0 && Uri.TryCreate(normalized, UriKind.Absolute, out var uri) ? uri.Host : string.Empty;
         }
 
         private static bool LooksLikeIp(string host) => System.Net.IPAddress.TryParse(host, out _);

@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Deux cibles, une seule source. Le DLL produit ne vaut que pour une lignée :
-      -p:JellyfinTarget=jf12  -> Jellyfin 12.x,   .NET 10  (défaut)
-      -p:JellyfinTarget=jf10  -> Jellyfin 10.11.x, .NET 9
-    Tout le code n'utilise que des API stables des deux côtés
-    (BasePlugin, IPluginServiceRegistrator, IStartupFilter, ControllerBase).
+    Two targets, one source. The resulting DLL is only valid for one Jellyfin line:
+      -p:JellyfinTarget=jf12  -> Jellyfin 12.x,    .NET 10  (default)
+      -p:JellyfinTarget=jf10  -> Jellyfin 10.11.x, .NET 9   (builds, but is not tested or released)
+    The code only uses APIs that are stable on both sides
+    (BasePlugin, IPluginServiceRegistrator, IStartupFilter, ControllerBase, IQuickConnect).
   -->
   <PropertyGroup>
     <JellyfinTarget Condition="'$(JellyfinTarget)' == ''">jf12</JellyfinTarget>
@@ -15,6 +15,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(JellyfinTarget)' == 'jf10'">

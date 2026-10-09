@@ -1,50 +1,111 @@
+using System.Text.RegularExpressions;
+using Jellyfin.Plugin.SeerrSearch.Services;
 using MediaBrowser.Model.Plugins;
 
 namespace Jellyfin.Plugin.SeerrSearch.Configuration
 {
     public class PluginConfiguration : BasePluginConfiguration
     {
-        /// <summary>URL interne de Seerr, vue depuis le serveur Jellyfin (ex. http://seerr:5055).</summary>
+        public const string UnlinkedNotice = "notice";
+        public const string UnlinkedHide = "hide";
+
+        private static readonly Regex LanguagePattern = new(@"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Seerr URL as seen from the Jellyfin server (e.g. http://seerr:5055). No default value:
+        /// the plugin stays dormant until an administrator fills it in.
+        /// </summary>
         public string SeerrUrl { get; set; } = string.Empty;
 
-        /// <summary>URL publique de Seerr, pour les liens « Ouvrir dans Seerr » du navigateur. Facultatif.</summary>
+        /// <summary>Public Seerr URL, used for the "Open in Seerr" links in the browser. Optional.</summary>
         public string SeerrPublicUrl { get; set; } = string.Empty;
 
         /// <summary>
-        /// URL publique de Jellyfin (ex. https://jellyfin.mondomaine.ca). Avec une URL publique
-        /// de Seerr sur le même domaine parent, le lien « Ouvrir dans Seerr » connecte
-        /// l'utilisateur automatiquement par Quick Connect.
+        /// Public Jellyfin URL (e.g. https://jellyfin.example.com). Together with a public Seerr URL on the
+        /// same parent domain, it lets "Open in Seerr" sign the user in automatically through Quick Connect.
         /// </summary>
         public string JellyfinPublicUrl { get; set; } = string.Empty;
 
-        /// <summary>Clé API Seerr (Paramètres → Général → Clé API). Ne quitte jamais le serveur.</summary>
+        /// <summary>Seerr API key (Settings → General → API Key). Never leaves the server.</summary>
         public string ApiKey { get; set; } = string.Empty;
 
-        /// <summary>Active l'injection du script et les appels à Seerr.</summary>
+        /// <summary>Turns the script injection and the calls to Seerr on or off.</summary>
         public bool Enabled { get; set; } = true;
 
-        /// <summary>Nombre minimum de caractères avant d'interroger Seerr.</summary>
+        /// <summary>Minimum number of characters before Seerr is queried.</summary>
         public int MinQueryLength { get; set; } = 3;
 
-        /// <summary>Nombre maximum de résultats affichés sous la recherche Jellyfin.</summary>
+        /// <summary>Maximum number of results shown under the Jellyfin search results.</summary>
         public int MaxResults { get; set; } = 20;
 
-        /// <summary>Masque les titres déjà disponibles dans la bibliothèque (ils sont déjà dans les résultats Jellyfin).</summary>
+        /// <summary>Hides titles that are already in the library (Jellyfin already lists them just above).</summary>
         public bool HideAvailable { get; set; } = true;
 
-        /// <summary>Langue passée à Seerr pour les titres et résumés (ex. fr-CA, fr, en).</summary>
-        public string Language { get; set; } = "fr";
+        /// <summary>
+        /// Language passed to Seerr for titles and overviews (e.g. fr-CA, fr, en).
+        /// Empty (the default) = follow each user's Jellyfin interface language, English if unknown.
+        /// </summary>
+        public string Language { get; set; } = string.Empty;
 
-        /// <summary>Demande les séries en entier. Sinon, seules les saisons manquantes sont demandées.</summary>
-        public bool RequestAllSeasons { get; set; } = true;
-
-        /// <summary>Autorise les demandes 4K quand l'utilisateur en a la permission dans Seerr.</summary>
+        /// <summary>Allows 4K requests (adds a 4K button) when the user has the permission in Seerr.</summary>
         public bool Allow4k { get; set; }
 
-        /// <summary>Affiche un lien « Ouvrir dans Seerr » dans la fiche. Hors de Jellyfin, la session Seerr n'existe pas.</summary>
+        /// <summary>Shows an "Open in Seerr" link in the detail sheet even without automatic sign-in.</summary>
         public bool ShowSeerrLink { get; set; }
 
-        /// <summary>Coupe l'injection du script sans désactiver le reste du plugin.</summary>
+        /// <summary>Stops the script injection without disabling the rest of the plugin.</summary>
         public bool DisableScriptInjection { get; set; }
+
+        /// <summary>
+        /// What a Jellyfin user who has no Seerr account sees: "notice" (a short message, the default)
+        /// or "hide" (nothing at all).
+        /// </summary>
+        public string UnlinkedUserBehavior { get; set; } = UnlinkedNotice;
+
+        /// <summary>Custom text for the "notice" behavior. Empty = the built-in translated message.</summary>
+        public string UnlinkedUserMessage { get; set; } = string.Empty;
+
+        /// <summary>Normalizes the values an administrator can type, so that bad input is never used.</summary>
+        public void Sanitize()
+        {
+            SeerrUrl = UrlUtil.Normalize(SeerrUrl);
+            SeerrPublicUrl = UrlUtil.Normalize(SeerrPublicUrl);
+            JellyfinPublicUrl = UrlUtil.Normalize(JellyfinPublicUrl);
+            ApiKey = (ApiKey ?? string.Empty).Trim();
+            MinQueryLength = System.Math.Clamp(MinQueryLength, 1, 10);
+            MaxResults = System.Math.Clamp(MaxResults, 1, 60);
+
+            Language = NormalizeLanguage(Language);
+
+            UnlinkedUserBehavior = string.Equals(UnlinkedUserBehavior, UnlinkedHide, System.StringComparison.OrdinalIgnoreCase)
+                ? UnlinkedHide
+                : UnlinkedNotice;
+
+            var message = (UnlinkedUserMessage ?? string.Empty).Trim();
+            UnlinkedUserMessage = message.Length > 300 ? message[..300] : message;
+        }
+
+        /// <summary>
+        /// A language code in the form TMDB expects ("fr", "fr-CA": language lower case, region upper case),
+        /// or an empty string when the value does not look like a language code.
+        /// </summary>
+        public static string NormalizeLanguage(string? value)
+        {
+            var trimmed = (value ?? string.Empty).Trim().Replace('_', '-');
+
+            if (!LanguagePattern.IsMatch(trimmed))
+            {
+                return string.Empty;
+            }
+
+            var parts = trimmed.Split('-');
+            if (parts.Length == 1)
+            {
+                return parts[0].ToLowerInvariant();
+            }
+
+            var region = parts[1].Length == 2 ? parts[1].ToUpperInvariant() : parts[1];
+            return parts[0].ToLowerInvariant() + "-" + region;
+        }
     }
 }

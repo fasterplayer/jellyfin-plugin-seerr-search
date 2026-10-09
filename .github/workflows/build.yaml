@@ -1,29 +1,89 @@
-name: Build
+name: Build and release
 
 on:
   push:
     branches: [main]
+    tags: ['[0-9]+.[0-9]+.[0-9]+.[0-9]+']
+    paths-ignore:
+      - '**/*.md'
+      - 'manifest.json'
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: jf10
-            dotnet: "9.0.x"
-          - target: jf12
-            dotnet: "10.0.x"
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ matrix.dotnet }}
-      - name: Build ${{ matrix.target }}
-        run: dotnet build -c Release -p:JellyfinTarget=${{ matrix.target }}
+          dotnet-version: '10.0.x'
+
+      - name: Check the version (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: node .github/scripts/release.mjs check "${GITHUB_REF_NAME}"
+
+      - name: Build for Jellyfin 12 (released)
+        run: dotnet build Jellyfin.Plugin.SeerrSearch/Jellyfin.Plugin.SeerrSearch.csproj -c Release -p:JellyfinTarget=jf12 -o out/jf12
+
+      - name: Build for Jellyfin 10.11 (compile check only)
+        run: dotnet build Jellyfin.Plugin.SeerrSearch/Jellyfin.Plugin.SeerrSearch.csproj -c Release -p:JellyfinTarget=jf10 -o out/jf10
+
+      - name: Syntax check of the client script and the test mock
+        run: |
+          node --check Jellyfin.Plugin.SeerrSearch/js/seerr-search.js
+          node --check tests/mock-seerr.mjs
+
       - uses: actions/upload-artifact@v4
         with:
-          name: Jellyfin.Plugin.SeerrSearch-${{ matrix.target }}
-          path: Jellyfin.Plugin.SeerrSearch/bin/Release/*/Jellyfin.Plugin.SeerrSearch.dll
+          name: Jellyfin.Plugin.SeerrSearch-jf12
+          path: out/jf12/Jellyfin.Plugin.SeerrSearch.dll
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Jellyfin.Plugin.SeerrSearch-jf12
+          path: artifact
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          ZIP="dist/seerrsearch_${GITHUB_REF_NAME}.zip"
+          (cd artifact && zip -j "../${ZIP}" Jellyfin.Plugin.SeerrSearch.dll)
+          unzip -l "${ZIP}"
+          echo "ZIP=${ZIP}" >> "$GITHUB_ENV"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/release.mjs notes "${GITHUB_REF_NAME}" > notes.md
+          gh release create "${GITHUB_REF_NAME}" "${ZIP}" --title "${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag
+
+      - name: Add the version to manifest.json (on main)
+        run: |
+          cp .github/scripts/release.mjs /tmp/release.mjs
+          git fetch origin main
+          git checkout -B main origin/main
+          node /tmp/release.mjs manifest "${GITHUB_REF_NAME}" "${ZIP}" "${GITHUB_REPOSITORY}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "manifest.json: add ${GITHUB_REF_NAME}"
+          git push origin HEAD:main

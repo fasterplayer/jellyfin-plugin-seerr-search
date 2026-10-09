@@ -10,16 +10,16 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SeerrSearch.Services
 {
     /// <summary>
-    /// Insère la balise &lt;script&gt; du plugin dans l'index.html du client web,
-    /// au moment où la page est servie.
+    /// Inserts the plugin's &lt;script&gt; tag into the web client's index.html at the
+    /// moment the page is served.
     ///
-    /// Rien n'est écrit sur le disque : le dossier web n'a pas besoin d'être
-    /// accessible en écriture, et une mise à jour de jellyfin-web n'efface pas
-    /// l'injection. Le même code fonctionne sur Jellyfin 10.11 et 12.
+    /// Nothing is written to disk: the web folder does not need to be writable, and a
+    /// jellyfin-web update does not erase the injection. The same code works on
+    /// Jellyfin 10.11 and 12.
     ///
-    /// Le filtre est volontairement peureux : il ne touche qu'à index.html, ne
-    /// réinjecte pas si la balise est déjà là, et en cas de pépin sert la page
-    /// d'origine sans rien casser.
+    /// The filter is deliberately timid: it only touches index.html, does not inject
+    /// twice, does nothing until Seerr is configured, and serves the original page
+    /// untouched if anything goes wrong.
     /// </summary>
     public class ScriptInjectionStartupFilter : IStartupFilter
     {
@@ -35,8 +35,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         {
             return app =>
             {
-                // Enregistré avant le reste du pipeline : en retirant Accept-Encoding
-                // ci-dessous, on récupère une réponse non compressée, donc lisible.
+                // Registered before the rest of the pipeline: by removing Accept-Encoding
+                // below, we get an uncompressed, readable response.
                 app.Use(InvokeAsync);
                 next(app);
             };
@@ -49,6 +49,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             if (config == null
                 || !config.Enabled
                 || config.DisableScriptInjection
+                || !SeerrClient.IsConfigured
                 || !HttpMethods.IsGet(context.Request.Method)
                 || !IsIndexRequest(context.Request.Path.Value))
             {
@@ -56,7 +57,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 return;
             }
 
-            // Une réponse partielle (206) ou compressée ne se réécrit pas proprement.
+            // A partial (206) or compressed response cannot be rewritten cleanly.
             context.Request.Headers.Remove("Accept-Encoding");
             context.Request.Headers.Remove("Range");
             context.Request.Headers.Remove("If-Range");
@@ -71,8 +72,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             }
             catch
             {
-                // L'échec vient d'en dessous : on jette le tampon (jamais écrit sur
-                // le vrai flux) et on relaie, pour que l'hôte rende sa page d'erreur.
+                // The failure comes from below: drop the buffer (never written to the real
+                // stream) and rethrow, so the host renders its own error page.
                 context.Response.Body = originalBody;
                 throw;
             }
@@ -106,13 +107,13 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
                     if (System.Threading.Interlocked.Exchange(ref _loggedOnce, 1) == 0)
                     {
-                        _logger.LogInformation("Seerr Search : script injecté dans index.html à la volée.");
+                        _logger.LogInformation("Seerr Search: script injected into index.html on the fly.");
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Seerr Search : injection impossible, la page d'origine est servie telle quelle.");
+                _logger.LogWarning(ex, "Seerr Search: injection failed, the original page is served unchanged.");
             }
 
             var bytes = Encoding.UTF8.GetBytes(html);
@@ -125,8 +126,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             await originalBody.WriteAsync(bytes).ConfigureAwait(false);
         }
 
-        // "/web", "/web/" et "/web/index.html" — EndsWith pour rester juste
-        // quand Jellyfin est servi sous un préfixe (ex. /jellyfin/web/).
+        // "/web", "/web/" and "/web/index.html" — EndsWith to stay correct when
+        // Jellyfin is served under a prefix (e.g. /jellyfin/web/).
         private static bool IsIndexRequest(string? path)
         {
             if (string.IsNullOrEmpty(path))

@@ -27,10 +27,10 @@ namespace Jellyfin.Plugin.SeerrSearch
         public override Guid Id => new Guid("e12caac0-0a7f-495a-a2b3-1a7b261b556b");
 
         public override string Description =>
-            "Ajoute les résultats de Seerr sous la recherche Jellyfin, avec un bouton Demander, "
-            + "chaque demande étant attribuée au compte Seerr de l'utilisateur connecté.";
+            "Shows Seerr results under the Jellyfin search, with a Request button. "
+            + "Each request is made as the Seerr account of the signed-in Jellyfin user.";
 
-        /// <summary>Change à chaque démarrage et à chaque sauvegarde de config, pour casser le cache du script.</summary>
+        /// <summary>Changes at every start and every configuration save, to break the browser cache of the script.</summary>
         public string ScriptCacheKey { get; private set; }
 
         public IEnumerable<PluginPageInfo> GetPages()
@@ -44,10 +44,16 @@ namespace Jellyfin.Plugin.SeerrSearch
 
         public override void UpdateConfiguration(BasePluginConfiguration configuration)
         {
+            // Whatever an administrator typed is normalized before it is stored or used.
+            if (configuration is PluginConfiguration typed)
+            {
+                typed.Sanitize();
+            }
+
             base.UpdateConfiguration(configuration);
 
-            // BasePlugin lève déjà ConfigurationChanged; ici on ne fait que
-            // renouveler la clé de cache du script client.
+            // BasePlugin already raises ConfigurationChanged; here we only renew the
+            // cache key of the client script.
             ScriptCacheKey = DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture);
         }
 

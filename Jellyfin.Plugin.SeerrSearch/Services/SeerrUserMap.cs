@@ -7,12 +7,11 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SeerrSearch.Services
 {
     /// <summary>
-    /// Fait le pont entre un utilisateur Jellyfin et son compte Seerr.
+    /// Bridges a Jellyfin user and their Seerr account.
     ///
-    /// Seerr garde l'identifiant Jellyfin de chaque utilisateur importé
-    /// (champ jellyfinUserId). On s'en sert comme clé : pas de configuration
-    /// par utilisateur, pas de mot de passe, et un utilisateur renommé reste lié.
-    /// Le résultat est mis en cache et rafraîchi quand un identifiant manque à l'appel.
+    /// Seerr keeps the Jellyfin id of every imported user (field jellyfinUserId). It is used
+    /// as the key: no per-user configuration, no password, and a renamed user stays linked.
+    /// The result is cached and refreshed when an id is missing from a call.
     /// </summary>
     public class SeerrUserMap
     {
@@ -44,9 +43,12 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         public int MappedUserCount => _map.Count;
 
+        /// <summary>Whether this Jellyfin user (id without dashes) is known to be linked, from the current cache.</summary>
+        public bool IsMapped(string jellyfinUserIdNoDashes) => _map.ContainsKey(Normalize(jellyfinUserIdNoDashes));
+
         /// <summary>
-        /// Identifiant Seerr correspondant à cet utilisateur Jellyfin, ou null s'il
-        /// n'a pas encore été importé dans Seerr.
+        /// The Seerr id matching this Jellyfin user, or null when they have not been
+        /// imported into Seerr yet.
         /// </summary>
         public async Task<int?> GetSeerrUserIdAsync(Guid jellyfinUserId, CancellationToken ct = default)
         {
@@ -64,8 +66,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         public async Task RefreshAsync(CancellationToken ct = default)
         {
-            // Un seul rafraîchissement à la fois; les autres appels attendent puis
-            // relisent le cache que le premier vient de remplir.
+            // One refresh at a time; the other calls wait, then read the cache the
+            // first one has just filled.
             if (!await _refreshLock.WaitAsync(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false))
             {
                 return;
@@ -98,7 +100,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 }
 
                 _lastRefreshUtc = DateTime.UtcNow;
-                _logger.LogInformation("Seerr Search : {Count} utilisateurs liés à des comptes Jellyfin.", _map.Count);
+                _logger.LogInformation("Seerr Search: {Count} Seerr users are linked to Jellyfin accounts.", _map.Count);
             }
             finally
             {
@@ -106,7 +108,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             }
         }
 
-        /// <summary>Jellyfin sert ses identifiants sans tirets, Seerr les stocke tels quels : on compare sur la même forme.</summary>
+        /// <summary>Jellyfin serves its ids without dashes while Seerr may store either form: compare on the same form.</summary>
         private static string Normalize(Guid id) => id.ToString("N");
 
         private static string Normalize(string id) => id.Replace("-", string.Empty, StringComparison.Ordinal);

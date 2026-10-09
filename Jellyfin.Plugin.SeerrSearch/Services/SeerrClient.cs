@@ -16,13 +16,13 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SeerrSearch.Services
 {
     /// <summary>
-    /// Toutes les communications avec Seerr. La clé API reste ici : le navigateur
-    /// ne parle qu'au contrôleur du plugin, jamais à Seerr directement.
+    /// All the communication with Seerr. The API key stays here: the browser only
+    /// talks to the plugin's controller, never to Seerr directly.
     ///
-    /// L'identité est portée par l'en-tête X-Api-User, que Seerr interprète comme
-    /// « agis au nom de cet utilisateur » quand la clé API est valide. C'est ce qui
-    /// fait que les quotas, les permissions et la paternité des demandes sont ceux
-    /// de l'utilisateur Jellyfin connecté, sans qu'il ait à se connecter à Seerr.
+    /// The identity is carried by the X-Api-User header, which Seerr reads as "act on
+    /// behalf of this user" when the API key is valid. That is what makes quotas,
+    /// permissions and request ownership those of the signed-in Jellyfin user,
+    /// without that user having to sign in to Seerr.
     /// </summary>
     public class SeerrClient
     {
@@ -41,12 +41,13 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         public static bool IsConfigured =>
             Config != null
-            && !string.IsNullOrWhiteSpace(Config.SeerrUrl)
+            && BaseUrl.Length > 0
             && !string.IsNullOrWhiteSpace(Config.ApiKey);
 
-        private static string BaseUrl => (Config?.SeerrUrl ?? string.Empty).TrimEnd('/');
+        // Only a plain http(s) URL is ever requested (see UrlUtil).
+        private static string BaseUrl => UrlUtil.Normalize(Config?.SeerrUrl);
 
-        /// <summary>Résultat brut d'un appel Seerr : le corps JSON et le code HTTP, tels quels.</summary>
+        /// <summary>Raw result of a Seerr call: the JSON body and the HTTP status, untouched.</summary>
         public sealed record SeerrResponse(HttpStatusCode StatusCode, string Body, IReadOnlyList<string> SetCookies)
         {
             public bool IsSuccess => (int)StatusCode >= 200 && (int)StatusCode < 300;
@@ -76,8 +77,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             => SendAsync(HttpMethod.Post, path, body, seerrUserId, false, ct);
 
         /// <summary>
-        /// Appel sans clé API, comme le ferait un navigateur : sert au Quick Connect,
-        /// dont la réponse porte le cookie de session à relayer.
+        /// A call without the API key, as a browser would make it: used by Quick Connect,
+        /// whose response carries the session cookie to relay.
         /// </summary>
         public Task<SeerrResponse> PostAnonymousAsync(string path, object? body, CancellationToken ct = default)
             => SendAsync(HttpMethod.Post, path, body, null, true, ct);
@@ -92,7 +93,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         {
             if (!IsConfigured)
             {
-                return new SeerrResponse(HttpStatusCode.ServiceUnavailable, "{\"error\":\"Seerr n'est pas configuré.\"}", Array.Empty<string>());
+                return new SeerrResponse(HttpStatusCode.ServiceUnavailable, "{\"error\":\"Seerr is not configured.\"}", Array.Empty<string>());
             }
 
             var url = BaseUrl + "/api/v1" + (path.StartsWith('/') ? path : "/" + path);
@@ -124,6 +125,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             {
                 var client = _httpClientFactory.CreateClient(NamedClient);
                 client.Timeout = TimeSpan.FromSeconds(20);
+                client.MaxResponseContentBufferSize = 10 * 1024 * 1024;
 
                 using var response = await client.SendAsync(request, ct).ConfigureAwait(false);
                 var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -131,7 +133,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger.LogWarning(
-                        "Seerr a répondu {Status} pour {Method} {Path}",
+                        "Seerr answered {Status} for {Method} {Path}",
                         (int)response.StatusCode,
                         method.Method,
                         path);
@@ -145,17 +147,17 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             }
             catch (TaskCanceledException) when (!ct.IsCancellationRequested)
             {
-                _logger.LogWarning("Délai dépassé en contactant Seerr ({Url})", url);
-                return new SeerrResponse(HttpStatusCode.GatewayTimeout, "{\"error\":\"Seerr n'a pas répondu à temps.\"}", Array.Empty<string>());
+                _logger.LogWarning("Timed out contacting Seerr ({Url})", url);
+                return new SeerrResponse(HttpStatusCode.GatewayTimeout, "{\"error\":\"Seerr did not answer in time.\"}", Array.Empty<string>());
             }
             catch (HttpRequestException ex)
             {
-                _logger.LogWarning(ex, "Impossible de joindre Seerr ({Url})", url);
-                return new SeerrResponse(HttpStatusCode.BadGateway, "{\"error\":\"Impossible de joindre Seerr.\"}", Array.Empty<string>());
+                _logger.LogWarning(ex, "Could not reach Seerr ({Url})", url);
+                return new SeerrResponse(HttpStatusCode.BadGateway, "{\"error\":\"Could not reach Seerr.\"}", Array.Empty<string>());
             }
         }
 
-        /// <summary>Liste paginée des utilisateurs Seerr (clé API = droits admin).</summary>
+        /// <summary>Paged list of the Seerr users (the API key has admin rights).</summary>
         public async Task<IReadOnlyList<JsonNode>> GetUsersAsync(CancellationToken ct = default)
         {
             var users = new List<JsonNode>();
@@ -197,6 +199,27 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             }
 
             return users;
+        }
+
+        /// <summary>The Jellyfin accounts Seerr can import (ids without dashes), as Seerr lists them.</summary>
+        public async Task<IReadOnlyList<string>> GetImportableJellyfinUserIdsAsync(CancellationToken ct = default)
+        {
+            var response = await GetAsync("/settings/jellyfin/users", null, ct).ConfigureAwait(false);
+            var ids = new List<string>();
+
+            if (response.IsSuccess && response.AsNode() is JsonArray array)
+            {
+                foreach (var item in array)
+                {
+                    var id = item?["id"]?.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(id))
+                    {
+                        ids.Add(id);
+                    }
+                }
+            }
+
+            return ids;
         }
     }
 }

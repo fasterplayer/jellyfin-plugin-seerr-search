@@ -1,18 +1,18 @@
 ---
 name: "Seerr Search"
 guid: "e12caac0-0a7f-495a-a2b3-1a7b261b556b"
-version: "1.0.0.0"
+version: "1.1.0.0"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 owner: "fasterplayer"
-overview: "Les résultats de Seerr sous la recherche Jellyfin, avec bouton Demander."
+overview: "Seerr results under the Jellyfin search, with a Request button."
 description: >
-  Ajoute une section « Disponible sur demande » sous les résultats de recherche du client web
-  Jellyfin. Les titres viennent de Seerr et chaque demande est créée au nom du compte Seerr lié
-  à l'utilisateur Jellyfin connecté : aucune seconde connexion, aucun mot de passe, et les quotas
-  et permissions de Seerr continuent de s'appliquer par utilisateur.
+  Adds an "Available on request" section under the search results of the Jellyfin web client.
+  Titles come from Seerr, and each request is created as the Seerr account linked to the
+  signed-in Jellyfin user: no second sign-in, no password, and Seerr's quotas and permissions
+  keep applying per user. The Seerr API key stays on the server.
 category: "General"
 artifacts:
   - "Jellyfin.Plugin.SeerrSearch.dll"
 changelog: >
-  Première version.
+  See CHANGELOG.md.

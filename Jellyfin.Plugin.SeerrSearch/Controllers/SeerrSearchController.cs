@@ -1,16 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
-using System.Security.Claims;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.SeerrSearch.Configuration;
 using Jellyfin.Plugin.SeerrSearch.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,9 +19,14 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.SeerrSearch.Controllers
 {
     /// <summary>
-    /// Le seul point de contact du navigateur. Chaque appel est authentifié par
-    /// Jellyfin, puis traduit en appel Seerr au nom de l'utilisateur correspondant.
-    /// La clé API ne sort jamais d'ici.
+    /// The browser's only point of contact. Every call is authenticated by Jellyfin, then
+    /// translated into a Seerr call on behalf of the matching user. The API key never leaves
+    /// this class and its services.
+    ///
+    /// Three endpoints are anonymous on purpose, and none of them returns anything private:
+    /// <c>script</c> (the client script, loaded by a plain script tag that cannot carry a
+    /// token), <c>ping</c> (a fixed string) and <c>sso</c> (it only redeems a one-time ticket
+    /// that an authenticated user obtained from <c>sso/ticket</c>).
     /// </summary>
     [ApiController]
     [Route("SeerrSearch")]
@@ -29,10 +34,22 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
     {
         private static readonly string[] AllowedImageSizes = { "w92", "w154", "w185", "w342", "w500", "original" };
         private static readonly Regex ImagePathPattern = new(@"^/[A-Za-z0-9._-]{4,64}\.(jpg|png|webp)$", RegexOptions.Compiled);
+        private static readonly Dictionary<string, string> ImageTypes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            [".jpg"] = "image/jpeg",
+            [".png"] = "image/png",
+            [".webp"] = "image/webp"
+        };
+
+        private const int MaxQueryLength = 200;
+        private const int SearchesPerMinute = 60;
+        private const int RequestsPerMinute = 20;
+        private const int ImagesPerMinute = 600;
 
         private readonly SeerrClient _seerr;
         private readonly SeerrUserMap _userMap;
         private readonly SeerrSso _sso;
+        private readonly RateLimiter _limiter;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<SeerrSearchController> _logger;
 
@@ -40,17 +57,19 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             SeerrClient seerr,
             SeerrUserMap userMap,
             SeerrSso sso,
+            RateLimiter limiter,
             IHttpClientFactory httpClientFactory,
             ILogger<SeerrSearchController> logger)
         {
             _seerr = seerr;
             _userMap = userMap;
             _sso = sso;
+            _limiter = limiter;
             _httpClientFactory = httpClientFactory;
             _logger = logger;
         }
 
-        /// <summary>Le script client, servi sans authentification : c'est une balise &lt;script&gt; ordinaire.</summary>
+        /// <summary>The client script, served without authentication: it is an ordinary script tag and holds no secret.</summary>
         [HttpGet("script")]
         [AllowAnonymous]
         public ActionResult GetScript()
@@ -74,10 +93,11 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             var js = reader.ReadToEnd();
 
             Response.Headers.CacheControl = "public, max-age=3600";
+            Response.Headers["X-Content-Type-Options"] = "nosniff";
             return Content(js, "application/javascript; charset=utf-8");
         }
 
-        /// <summary>Ce que le navigateur a le droit de savoir : jamais la clé API.</summary>
+        /// <summary>What the browser is allowed to know: never the API key.</summary>
         [HttpGet("config")]
         [Authorize]
         public async Task<ActionResult> GetClientConfig(CancellationToken ct)
@@ -88,35 +108,46 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return StatusCode((int)HttpStatusCode.ServiceUnavailable);
             }
 
+            if (!config.Enabled || !SeerrClient.IsConfigured)
+            {
+                return new JsonResult(new { enabled = false });
+            }
+
             var userId = GetJellyfinUserId();
             int? seerrUserId = null;
 
-            if (userId.HasValue && SeerrClient.IsConfigured)
+            if (userId.HasValue)
             {
                 seerrUserId = await _userMap.GetSeerrUserIdAsync(userId.Value, ct).ConfigureAwait(false);
             }
 
             return new JsonResult(new
             {
-                enabled = config.Enabled && SeerrClient.IsConfigured,
+                enabled = true,
                 linked = seerrUserId.HasValue,
-                minQueryLength = Math.Max(1, config.MinQueryLength),
+                unlinkedBehavior = config.UnlinkedUserBehavior,
+                unlinkedMessage = config.UnlinkedUserMessage ?? string.Empty,
+                minQueryLength = Math.Clamp(config.MinQueryLength, 1, 10),
                 maxResults = Math.Clamp(config.MaxResults, 1, 60),
                 hideAvailable = config.HideAvailable,
                 allow4k = config.Allow4k,
-                publicUrl = (config.SeerrPublicUrl ?? string.Empty).TrimEnd('/'),
+                publicUrl = UrlUtil.Normalize(config.SeerrPublicUrl),
                 sso = _sso.IsReady,
                 ssoMode = _sso.Mode,
                 seerrHost = SeerrSso.PublicSeerrHostName,
                 showSeerrLink = config.ShowSeerrLink || _sso.IsReady,
-                language = config.Language
+                language = config.Language ?? string.Empty
             });
         }
 
-        /// <summary>Recherche Seerr, filtrée et bornée, au nom de l'utilisateur connecté.</summary>
+        /// <summary>Seerr search, filtered and bounded, on behalf of the signed-in user.</summary>
         [HttpGet("search")]
         [Authorize]
-        public async Task<ActionResult> Search([FromQuery] string? query, [FromQuery] int page = 1, CancellationToken ct = default)
+        public async Task<ActionResult> Search(
+            [FromQuery] string? query,
+            [FromQuery] int page = 1,
+            [FromQuery] string? lang = null,
+            CancellationToken ct = default)
         {
             var config = Plugin.Instance?.Configuration;
             if (config == null || !config.Enabled || !SeerrClient.IsConfigured)
@@ -124,9 +155,19 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return StatusCode((int)HttpStatusCode.ServiceUnavailable, new { error = "not-configured" });
             }
 
-            if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < Math.Max(1, config.MinQueryLength))
+            if (string.IsNullOrWhiteSpace(query) || query.Trim().Length < Math.Clamp(config.MinQueryLength, 1, 10))
             {
                 return new JsonResult(new { results = Array.Empty<object>() });
+            }
+
+            if (query.Length > MaxQueryLength)
+            {
+                return BadRequest(new { error = "query-too-long" });
+            }
+
+            if (!_limiter.Allow("search", GetJellyfinUserId(), SearchesPerMinute))
+            {
+                return StatusCode((int)HttpStatusCode.TooManyRequests, new { error = "rate-limited" });
             }
 
             var seerrUserId = await ResolveSeerrUserIdAsync(ct).ConfigureAwait(false);
@@ -140,7 +181,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 "/search?query={0}&page={1}&language={2}",
                 Uri.EscapeDataString(query.Trim()),
                 Math.Clamp(page, 1, 20),
-                Uri.EscapeDataString(config.Language ?? "fr"));
+                Uri.EscapeDataString(ResolveLanguage(config, lang)));
 
             var response = await _seerr.GetAsync(path, seerrUserId, ct).ConfigureAwait(false);
             if (!response.IsSuccess)
@@ -160,19 +201,19 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 .Select(r => r!)
                 .Where(r =>
                 {
-                    var mediaType = r["mediaType"]?.GetValue<string>();
+                    var mediaType = SafeString(r["mediaType"]);
                     return mediaType == "movie" || mediaType == "tv";
                 })
                 .Where(r => !config.HideAvailable || GetMediaStatus(r) != 5)
                 .Take(Math.Clamp(config.MaxResults, 1, 60))
                 .Select(r => new
                 {
-                    id = r["id"]?.GetValue<int>(),
-                    mediaType = r["mediaType"]?.GetValue<string>(),
-                    title = r["title"]?.GetValue<string>() ?? r["name"]?.GetValue<string>(),
-                    overview = r["overview"]?.GetValue<string>(),
-                    posterPath = r["posterPath"]?.GetValue<string>(),
-                    date = r["releaseDate"]?.GetValue<string>() ?? r["firstAirDate"]?.GetValue<string>(),
+                    id = SafeInt(r["id"]),
+                    mediaType = SafeString(r["mediaType"]),
+                    title = SafeString(r["title"]) ?? SafeString(r["name"]),
+                    overview = SafeString(r["overview"]),
+                    posterPath = SafeString(r["posterPath"]),
+                    date = SafeString(r["releaseDate"]) ?? SafeString(r["firstAirDate"]),
                     status = GetMediaStatus(r),
                     status4k = GetMediaStatus(r, true)
                 })
@@ -181,7 +222,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             return new JsonResult(new { results = trimmed });
         }
 
-        /// <summary>Crée la demande dans Seerr, attribuée au compte de l'utilisateur connecté.</summary>
+        /// <summary>Creates the request in Seerr, owned by the signed-in user's account.</summary>
         [HttpPost("request")]
         [Authorize]
         public async Task<ActionResult> CreateRequest([FromBody] RequestPayload payload, CancellationToken ct)
@@ -199,11 +240,18 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return BadRequest(new { error = "bad-request" });
             }
 
+            if (!_limiter.Allow("request", GetJellyfinUserId(), RequestsPerMinute))
+            {
+                return StatusCode((int)HttpStatusCode.TooManyRequests, new { error = "rate-limited" });
+            }
+
             var seerrUserId = await ResolveSeerrUserIdAsync(ct).ConfigureAwait(false);
             if (seerrUserId == null)
             {
                 return StatusCode((int)HttpStatusCode.Conflict, new { error = "user-not-linked" });
             }
+
+            var is4k = config.Allow4k && payload.Is4k;
 
             object body = payload.MediaType == "tv"
                 ? new
@@ -211,13 +259,13 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                     mediaType = "tv",
                     mediaId = payload.MediaId,
                     seasons = "all",
-                    is4k = config.Allow4k && payload.Is4k
+                    is4k
                 }
                 : new
                 {
                     mediaType = "movie",
                     mediaId = payload.MediaId,
-                    is4k = config.Allow4k && payload.Is4k
+                    is4k
                 };
 
             var response = await _seerr.PostAsync("/request", body, seerrUserId, ct).ConfigureAwait(false);
@@ -225,7 +273,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             if (response.IsSuccess)
             {
                 _logger.LogInformation(
-                    "Seerr Search : demande créée ({MediaType} {MediaId}) pour l'utilisateur Seerr {SeerrUserId}.",
+                    "Seerr Search: request created ({MediaType} {MediaId}) for Seerr user {SeerrUserId}.",
                     payload.MediaType,
                     payload.MediaId,
                     seerrUserId);
@@ -233,13 +281,17 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return new JsonResult(new { ok = true });
             }
 
-            var message = response.AsNode()?["message"]?.GetValue<string>();
+            var message = SafeString(response.AsNode()?["message"]);
             return StatusCode((int)response.StatusCode, new { error = "seerr-error", message });
         }
 
-        /// <summary>Relais des affiches TMDB, pour que le navigateur n'ait qu'un seul interlocuteur.</summary>
+        /// <summary>
+        /// Relay for TMDB posters, so the browser has a single counterpart. Authenticated like the
+        /// rest (the client fetches it with its token): otherwise it would be an open image proxy.
+        /// The host is fixed and the path is restricted to a plain image file name.
+        /// </summary>
         [HttpGet("image")]
-        [AllowAnonymous]
+        [Authorize]
         public async Task<ActionResult> GetImage([FromQuery] string? p, [FromQuery] string size = "w185", CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(p) || !ImagePathPattern.IsMatch(p) || !AllowedImageSizes.Contains(size))
@@ -247,10 +299,16 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return BadRequest();
             }
 
+            if (!_limiter.Allow("image", GetJellyfinUserId(), ImagesPerMinute))
+            {
+                return StatusCode((int)HttpStatusCode.TooManyRequests);
+            }
+
             try
             {
                 var client = _httpClientFactory.CreateClient(SeerrClient.NamedClient);
                 client.Timeout = TimeSpan.FromSeconds(15);
+                client.MaxResponseContentBufferSize = 5 * 1024 * 1024;
 
                 using var upstream = await client
                     .GetAsync($"https://image.tmdb.org/t/p/{size}{p}", ct)
@@ -262,9 +320,14 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 }
 
                 var bytes = await upstream.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-                Response.Headers.CacheControl = "public, max-age=604800";
 
-                return File(bytes, upstream.Content.Headers.ContentType?.MediaType ?? "image/jpeg");
+                // The content type comes from the file extension we validated, never from the upstream.
+                var contentType = ImageTypes[Path.GetExtension(p)];
+
+                Response.Headers.CacheControl = "private, max-age=604800";
+                Response.Headers["X-Content-Type-Options"] = "nosniff";
+
+                return File(bytes, contentType);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
             {
@@ -272,7 +335,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             }
         }
 
-        /// <summary>Test de connexion pour la page de configuration (administrateurs).</summary>
+        /// <summary>Connection test for the configuration page (administrators only).</summary>
         [HttpGet("status")]
         [Authorize]
         public async Task<ActionResult> GetStatus(CancellationToken ct)
@@ -293,20 +356,32 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return new JsonResult(new { ok = false, error = "unreachable", code = (int)status.StatusCode });
             }
 
+            // /status is public in Seerr: check the key too, with a call that needs it.
+            var users = await _seerr.GetAsync("/user?take=1", null, ct).ConfigureAwait(false);
+            if (!users.IsSuccess)
+            {
+                return new JsonResult(new { ok = false, error = "bad-key", code = (int)users.StatusCode });
+            }
+
+            _userMap.Invalidate();
             await _userMap.RefreshAsync(ct).ConfigureAwait(false);
+
+            var importable = await _seerr.GetImportableJellyfinUserIdsAsync(ct).ConfigureAwait(false);
+            var unlinked = importable.Count(id => !_userMap.IsMapped(id));
 
             return new JsonResult(new
             {
                 ok = true,
-                version = status.AsNode()?["version"]?.GetValue<string>(),
+                version = SafeString(status.AsNode()?["version"]),
                 linkedUsers = _userMap.MappedUserCount,
+                unlinkedUsers = unlinked,
                 sso = _sso.IsReady,
                 ssoMode = _sso.Mode,
                 ssoReason = _sso.WhyNotReady()
             });
         }
 
-        /// <summary>Importe les comptes Jellyfin dans Seerr (administrateurs), puis relit la table de correspondance.</summary>
+        /// <summary>Imports the Jellyfin accounts that are not in Seerr yet (administrators only), then reloads the map.</summary>
         [HttpPost("import-users")]
         [Authorize]
         public async Task<ActionResult> ImportUsers(CancellationToken ct)
@@ -316,7 +391,24 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return StatusCode((int)HttpStatusCode.Forbidden);
             }
 
-            var response = await _seerr.PostAsync("/user/import-from-jellyfin", new { }, null, ct).ConfigureAwait(false);
+            if (!SeerrClient.IsConfigured)
+            {
+                return StatusCode((int)HttpStatusCode.ServiceUnavailable, new { ok = false, error = "not-configured" });
+            }
+
+            _userMap.Invalidate();
+            await _userMap.RefreshAsync(ct).ConfigureAwait(false);
+
+            var missing = (await _seerr.GetImportableJellyfinUserIdsAsync(ct).ConfigureAwait(false))
+                .Where(id => !_userMap.IsMapped(id))
+                .ToList();
+
+            if (missing.Count == 0)
+            {
+                return new JsonResult(new { ok = true, imported = 0, linkedUsers = _userMap.MappedUserCount });
+            }
+
+            var response = await _seerr.PostAsync("/user/import-from-jellyfin", new { jellyfinUserIds = missing }, null, ct).ConfigureAwait(false);
 
             if (!response.IsSuccess)
             {
@@ -331,7 +423,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             return new JsonResult(new { ok = true, imported, linkedUsers = _userMap.MappedUserCount });
         }
 
-        /// <summary>Signature du plugin : sert à détecter le relais /SeerrSearch/ sur l'hôte de Seerr.</summary>
+        /// <summary>The plugin's signature: used to detect the /SeerrSearch/ relay on Seerr's host.</summary>
         [HttpGet("ping")]
         [AllowAnonymous]
         public ActionResult Ping()
@@ -340,7 +432,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             return Content(SeerrSso.PingBody, "text/plain; charset=utf-8");
         }
 
-        /// <summary>Billet à usage unique pour ouvrir Seerr déjà connecté (voir SeerrSso).</summary>
+        /// <summary>One-time ticket to open Seerr already signed in (see SeerrSso).</summary>
         [HttpPost("sso/ticket")]
         [Authorize]
         public ActionResult IssueSsoTicket([FromBody] SsoTicketRequest? payload)
@@ -349,6 +441,11 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             if (!userId.HasValue)
             {
                 return StatusCode((int)HttpStatusCode.Unauthorized);
+            }
+
+            if (!_limiter.Allow("ticket", userId, RequestsPerMinute))
+            {
+                return StatusCode((int)HttpStatusCode.TooManyRequests, new { error = "rate-limited" });
             }
 
             var url = _sso.IssueTicket(userId.Value, payload?.To);
@@ -361,29 +458,27 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
         }
 
         /// <summary>
-        /// Point d'arrivée de la navigation : consomme le billet, ouvre la session
-        /// Seerr côté serveur, dépose le cookie sur le domaine parent et redirige.
-        /// En cas de pépin, on atterrit sur la page de connexion de Seerr — jamais
-        /// sur une erreur brute.
+        /// Landing point of the navigation: redeems the ticket, opens the Seerr session on the
+        /// server side, sets the cookie and redirects. If anything goes wrong, the user lands on
+        /// Seerr's own sign-in page — never on a raw error.
         /// </summary>
         [HttpGet("sso")]
         [AllowAnonymous]
         public async Task<ActionResult> Sso([FromQuery] string? t, [FromQuery] int hop = 0, CancellationToken ct = default)
         {
             var config = Plugin.Instance?.Configuration;
-            if (config == null || string.IsNullOrWhiteSpace(config.SeerrPublicUrl))
+            var seerrPublic = UrlUtil.Normalize(config?.SeerrPublicUrl);
+            if (config == null || seerrPublic.Length == 0)
             {
                 return NotFound();
             }
 
-            var seerrPublic = config.SeerrPublicUrl.TrimEnd('/');
             var loginPage = seerrPublic + "/login";
 
-            // Le cookie ne vaut que s'il est déposé depuis le bon hôte : celui de Seerr
-            // en mode relais, celui de Jellyfin en mode domaine. Arrivé par une autre
-            // adresse (IP locale, par exemple), on repasse par le bon hôte sans
-            // consommer le billet — une seule fois.
-            var expectedOrigin = (_sso.ProxyMode ? config.SeerrPublicUrl : config.JellyfinPublicUrl).TrimEnd('/');
+            // The cookie is only worth something if it is set from the right host: Seerr's in
+            // relay mode, Jellyfin's in domain mode. Arriving through another address (a local
+            // IP, say), we go back through the right host without redeeming the ticket — once.
+            var expectedOrigin = UrlUtil.Normalize(_sso.ProxyMode ? config.SeerrPublicUrl : config.JellyfinPublicUrl);
             if (!Uri.TryCreate(expectedOrigin, UriKind.Absolute, out var expectedUri))
             {
                 return Redirect(loginPage);
@@ -407,9 +502,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             var result = await _sso.SignInAsync(ticket.UserId, ct).ConfigureAwait(false);
             if (!result.Ok)
             {
-                // On va quand même à la page visée : si une session Seerr existe
-                // déjà dans ce navigateur, elle sert; sinon Seerr affichera lui-même
-                // sa page de connexion, en gardant la cible.
+                // Go to the target page anyway: if a Seerr session already exists in this
+                // browser it is used; otherwise Seerr shows its own sign-in page, keeping the target.
                 return Redirect(seerrPublic + ticket.To);
             }
 
@@ -441,19 +535,47 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
 
         private bool IsAdministrator() => User.IsInRole("Administrator");
 
-        private static int GetMediaStatus(JsonNode result, bool fourK = false)
+        /// <summary>The configured language, else the one the browser reported (if it looks like a language code), else English.</summary>
+        private static string ResolveLanguage(PluginConfiguration config, string? requested)
         {
-            var key = fourK ? "status4k" : "status";
-            var status = result["mediaInfo"]?[key];
+            var configured = PluginConfiguration.NormalizeLanguage(config.Language);
+            if (configured.Length > 0)
+            {
+                return configured;
+            }
 
+            var fromBrowser = PluginConfiguration.NormalizeLanguage(requested);
+            return fromBrowser.Length > 0 ? fromBrowser : "en";
+        }
+
+        private static string? SafeString(JsonNode? node)
+        {
             try
             {
-                return status?.GetValue<int>() ?? 0;
+                return node?.GetValue<string>();
             }
             catch (Exception ex) when (ex is FormatException or InvalidOperationException)
             {
-                return 0;
+                return null;
             }
+        }
+
+        private static int? SafeInt(JsonNode? node)
+        {
+            try
+            {
+                return node?.GetValue<int>();
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        private static int GetMediaStatus(JsonNode result, bool fourK = false)
+        {
+            var key = fourK ? "status4k" : "status";
+            return SafeInt(result["mediaInfo"]?[key]) ?? 0;
         }
 
         public class SsoTicketRequest

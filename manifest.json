@@ -2,8 +2,8 @@
   {
     "guid": "e12caac0-0a7f-495a-a2b3-1a7b261b556b",
     "name": "Seerr Search",
-    "description": "Ajoute les résultats de Seerr sous la recherche Jellyfin, avec un bouton Demander. Chaque demande est attribuée au compte Seerr de l'utilisateur Jellyfin connecté.",
-    "overview": "Les résultats de Seerr sous la recherche Jellyfin.",
+    "description": "Adds an \"Available on request\" section under the search results of the Jellyfin web client. Titles come from Seerr, and each request is created as the Seerr account linked to the signed-in Jellyfin user: no second sign-in, no password, and Seerr's quotas and permissions keep applying per user. The Seerr API key stays on the server.",
+    "overview": "Seerr results under the Jellyfin search, with a Request button.",
     "owner": "fasterplayer",
     "category": "General",
     "imageUrl": "",

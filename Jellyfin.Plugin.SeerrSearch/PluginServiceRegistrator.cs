@@ -11,15 +11,17 @@ namespace Jellyfin.Plugin.SeerrSearch
     {
         public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
         {
-            // Pas de redirection automatique : un proxy d'authentification devant Seerr
-            // (Authelia, Authentik…) répond 302 vers sa page de login; mieux vaut le voir
-            // comme une erreur que suivre la redirection et recevoir du HTML à la place du JSON.
+            // No automatic redirects: an authentication proxy in front of Seerr (Authelia, Authentik…)
+            // answers 302 to its login page. It is better to see that as an error than to follow it
+            // and receive HTML instead of JSON. It also keeps the API key from being replayed to
+            // another host by a redirect.
             serviceCollection.AddHttpClient(SeerrClient.NamedClient)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
                 {
                     AllowAutoRedirect = false
                 });
 
+            serviceCollection.AddSingleton<RateLimiter>();
             serviceCollection.AddSingleton<SeerrClient>();
             serviceCollection.AddSingleton<SeerrUserMap>();
             serviceCollection.AddSingleton<SeerrSso>();
