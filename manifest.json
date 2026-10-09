@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "e12caac0-0a7f-495a-a2b3-1a7b261b556b",
+    "name": "Seerr Search",
+    "description": "Ajoute les résultats de Seerr sous la recherche Jellyfin, avec un bouton Demander. Chaque demande est attribuée au compte Seerr de l'utilisateur Jellyfin connecté.",
+    "overview": "Les résultats de Seerr sous la recherche Jellyfin.",
+    "owner": "fasterplayer",
+    "category": "General",
+    "imageUrl": "",
+    "versions": []
+  }
+]

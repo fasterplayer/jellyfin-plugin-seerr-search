@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title>Seerr Search</title>
+</head>
+<body>
+<div id="SeerrSearchConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="SeerrSearchConfigForm">
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Seerr Search</h2>
+                    <p class="fieldDescription">
+                        Ajoute les résultats de Seerr sous la recherche Jellyfin. Chaque demande est créée
+                        au nom du compte Seerr lié à l'utilisateur Jellyfin connecté.
+                    </p>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="Enabled"/>
+                        <span>Activer le plugin</span>
+                    </label>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="url" id="SeerrUrl" label="URL de Seerr (vue depuis le serveur)"/>
+                    <div class="fieldDescription">Par exemple http://seerr:5055 si les deux conteneurs partagent un réseau Docker.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="password" id="ApiKey" label="Clé API Seerr"/>
+                    <div class="fieldDescription">Seerr → Paramètres → Général → Clé API. Elle reste sur le serveur et n'est jamais envoyée au navigateur.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="url" id="SeerrPublicUrl" label="URL publique de Seerr (facultatif)"/>
+                    <div class="fieldDescription">Sert au lien « Ouvrir dans Seerr » de la fiche, par exemple https://seerr.mondomaine.ca.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="url" id="JellyfinPublicUrl" label="URL publique de Jellyfin (facultatif)"/>
+                    <div class="fieldDescription">
+                        Avec une URL publique de Seerr, un appui sur une carte ouvre Seerr déjà connecté (Quick Connect, sans mot de passe).
+                        Deux façons : soit le proxy devant Seerr relaie <code>/SeerrSearch/</code> vers Jellyfin (détecté tout seul, préférable),
+                        soit Jellyfin et Seerr partagent un domaine parent (jellyfin.mondomaine.ca et seerr.mondomaine.ca) et cette URL est remplie.
+                        Le Quick Connect doit être activé dans Jellyfin.
+                    </div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="text" id="Language" label="Langue des titres et résumés"/>
+                    <div class="fieldDescription">Code TMDB, par exemple fr, fr-CA ou en.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="MinQueryLength" min="1" max="10" label="Caractères minimum avant d'interroger Seerr"/>
+                </div>
+
+                <div class="inputContainer">
+                    <input is="emby-input" type="number" id="MaxResults" min="1" max="60" label="Nombre maximum de résultats affichés"/>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="HideAvailable"/>
+                        <span>Masquer les titres déjà dans la bibliothèque</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">Ils apparaissent déjà dans les résultats Jellyfin juste au-dessus.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="Allow4k"/>
+                        <span>Autoriser les demandes 4K</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">Seerr applique quand même ses propres permissions par utilisateur.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="ShowSeerrLink"/>
+                        <span>Afficher le lien « Ouvrir dans Seerr » même sans connexion automatique</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">Avec la connexion automatique configurée, le lien est toujours affiché. Sans elle, il ouvre Seerr déconnecté.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="DisableScriptInjection"/>
+                        <span>Ne pas injecter le script dans le client web</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription">À cocher seulement si un autre plugin s'occupe déjà de l'injection.</div>
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block">
+                        <span>Enregistrer</span>
+                    </button>
+                </div>
+
+                <div class="verticalSection" style="margin-top:2em;">
+                    <h3 class="sectionTitle">Connexion et utilisateurs</h3>
+                    <div style="display:flex;gap:1em;flex-wrap:wrap;">
+                        <button is="emby-button" type="button" id="TestConnection" class="raised block" style="flex:1;min-width:14em;">
+                            <span>Tester la connexion</span>
+                        </button>
+                        <button is="emby-button" type="button" id="ImportUsers" class="raised block" style="flex:1;min-width:14em;">
+                            <span>Importer les utilisateurs Jellyfin dans Seerr</span>
+                        </button>
+                    </div>
+                    <p class="fieldDescription" id="SeerrStatusLine" style="margin-top:1em;"></p>
+                    <p class="fieldDescription">
+                        Un utilisateur ne voit les résultats Seerr que si son compte Jellyfin est importé dans Seerr.
+                        L'import est aussi faisable depuis Seerr → Utilisateurs → Importer depuis Jellyfin.
+                    </p>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (function () {
+            var pluginId = 'e12caac0-0a7f-495a-a2b3-1a7b261b556b';
+
+            function serverUrl(path) {
+                return ApiClient.serverAddress().replace(/\/$/, '') + '/SeerrSearch/' + path;
+            }
+
+            function authHeaders() {
+                return { Authorization: 'MediaBrowser Token="' + ApiClient.accessToken() + '"' };
+            }
+
+            function status(message) {
+                document.querySelector('#SeerrStatusLine').textContent = message;
+            }
+
+            function load(page) {
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    page.querySelector('#Enabled').checked = config.Enabled !== false;
+                    page.querySelector('#SeerrUrl').value = config.SeerrUrl || '';
+                    page.querySelector('#ApiKey').value = config.ApiKey || '';
+                    page.querySelector('#SeerrPublicUrl').value = config.SeerrPublicUrl || '';
+                    page.querySelector('#JellyfinPublicUrl').value = config.JellyfinPublicUrl || '';
+                    page.querySelector('#Language').value = config.Language || 'fr';
+                    page.querySelector('#MinQueryLength').value = config.MinQueryLength || 3;
+                    page.querySelector('#MaxResults').value = config.MaxResults || 20;
+                    page.querySelector('#HideAvailable').checked = config.HideAvailable !== false;
+                    page.querySelector('#Allow4k').checked = config.Allow4k === true;
+                    page.querySelector('#ShowSeerrLink').checked = config.ShowSeerrLink === true;
+                    page.querySelector('#DisableScriptInjection').checked = config.DisableScriptInjection === true;
+                    Dashboard.hideLoadingMsg();
+                });
+            }
+
+            function save(page) {
+                Dashboard.showLoadingMsg();
+
+                ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                    config.Enabled = page.querySelector('#Enabled').checked;
+                    config.SeerrUrl = page.querySelector('#SeerrUrl').value.trim();
+                    config.ApiKey = page.querySelector('#ApiKey').value.trim();
+                    config.SeerrPublicUrl = page.querySelector('#SeerrPublicUrl').value.trim();
+                    config.JellyfinPublicUrl = page.querySelector('#JellyfinPublicUrl').value.trim();
+                    config.Language = page.querySelector('#Language').value.trim() || 'fr';
+                    config.MinQueryLength = parseInt(page.querySelector('#MinQueryLength').value, 10) || 3;
+                    config.MaxResults = parseInt(page.querySelector('#MaxResults').value, 10) || 20;
+                    config.HideAvailable = page.querySelector('#HideAvailable').checked;
+                    config.Allow4k = page.querySelector('#Allow4k').checked;
+                    config.ShowSeerrLink = page.querySelector('#ShowSeerrLink').checked;
+                    config.DisableScriptInjection = page.querySelector('#DisableScriptInjection').checked;
+
+                    ApiClient.updatePluginConfiguration(pluginId, config).then(function (result) {
+                        Dashboard.processPluginConfigurationUpdateResult(result);
+                    });
+                });
+            }
+
+            document.querySelector('#SeerrSearchConfigPage').addEventListener('pageshow', function () {
+                Dashboard.showLoadingMsg();
+                load(this);
+            });
+
+            document.querySelector('#SeerrSearchConfigForm').addEventListener('submit', function (event) {
+                event.preventDefault();
+                save(document.querySelector('#SeerrSearchConfigPage'));
+                return false;
+            });
+
+            document.querySelector('#TestConnection').addEventListener('click', function () {
+                status('Test en cours…');
+
+                fetch(serverUrl('status'), { headers: authHeaders() })
+                    .then(function (response) { return response.json(); })
+                    .then(function (result) {
+                        if (result.ok) {
+                            status('Seerr ' + (result.version || '') + ' répond. ' + result.linkedUsers + ' utilisateur(s) lié(s) à un compte Jellyfin. '
+                                + (result.sso
+                                    ? 'Connexion automatique à Seerr : prête (' + (result.ssoMode === 'proxy' ? 'relais sur l\u2019hôte de Seerr' : 'cookie de domaine parent') + ').'
+                                    : 'Connexion automatique à Seerr : non — ' + (result.ssoReason || '')));
+                        } else if (result.error === 'not-configured') {
+                            status('URL ou clé API manquante. Enregistre d’abord la configuration.');
+                        } else {
+                            status('Seerr ne répond pas' + (result.code ? ' (code ' + result.code + ')' : '') + '.');
+                        }
+                    })
+                    .catch(function () {
+                        status('Test impossible : le serveur Jellyfin n’a pas répondu.');
+                    });
+            });
+
+            document.querySelector('#ImportUsers').addEventListener('click', function () {
+                status('Import en cours…');
+
+                fetch(serverUrl('import-users'), { method: 'POST', headers: authHeaders() })
+                    .then(function (response) { return response.json(); })
+                    .then(function (result) {
+                        if (result.ok) {
+                            status(result.imported + ' compte(s) importé(s). ' + result.linkedUsers + ' utilisateur(s) lié(s) au total.');
+                        } else {
+                            status('Import refusé par Seerr.');
+                        }
+                    })
+                    .catch(function () {
+                        status('Import impossible : le serveur Jellyfin n’a pas répondu.');
+                    });
+            });
+        })();
+    </script>
+</div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: jf10
+            dotnet: "9.0.x"
+          - target: jf12
+            dotnet: "10.0.x"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+      - name: Build ${{ matrix.target }}
+        run: dotnet build -c Release -p:JellyfinTarget=${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jellyfin.Plugin.SeerrSearch-${{ matrix.target }}
+          path: Jellyfin.Plugin.SeerrSearch/bin/Release/*/Jellyfin.Plugin.SeerrSearch.dll

@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <!-- Version partagée par l'assembly, le fichier et le paquet.
+         À garder synchronisée avec build.yaml et manifest.json. -->
+    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Authors>fasterplayer</Authors>
+    <Company>fasterplayer</Company>
+    <Copyright>Copyright © 2026 fasterplayer</Copyright>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/fasterplayer/jellyfin-plugin-seerr-search</RepositoryUrl>
+  </PropertyGroup>
+</Project>
