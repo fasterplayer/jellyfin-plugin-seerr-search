@@ -2,7 +2,7 @@
 //
 //   MOCK_KEY=secret JELLYFIN_URL=http://jellyfin:8096 PORT=5099 node tests/mock-seerr.mjs
 //
-// It implements just what the plugin calls (/api/v1/status, /user, /settings/jellyfin/users,
+// It implements just what the plugin calls (/api/v1/status, /settings/public, /settings/main, /user, /settings/jellyfin/users,
 // /user/import-from-jellyfin, /search, /request and the Quick Connect sign-in), checks the
 // X-Api-Key header like Seerr does, and records what it receives (/__admin/last) so a test can
 // assert that the right Seerr user (X-Api-User) and language were used.
@@ -19,6 +19,8 @@ const PORT = Number(process.env.PORT || 5099);
 let linked = {};
 // Jellyfin accounts Seerr could import
 let importable = [];
+// What Seerr says about itself (see /__admin/state): Application URL, media server (1 Plex, 2 Jellyfin, 3 Emby, 4 none), first-run wizard
+let settings = { appUrl: '', mediaServerType: 2, initialized: true, statusMode: '' };
 const seen = { searches: [], requests: [], imports: [] };
 
 const RESULTS = [
@@ -72,6 +74,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     linked = body.linked || {};
     importable = body.importable || [];
+    settings = { appUrl: body.appUrl || '', mediaServerType: body.mediaServerType ?? 2, initialized: body.initialized ?? true, statusMode: body.statusMode || '' };
     seen.searches = []; seen.requests = []; seen.imports = [];
     return send(res, 200, { ok: true });
   }
@@ -97,10 +100,20 @@ const server = http.createServer(async (req, res) => {
   const api = path.slice('/api/v1'.length);
 
   // /status is public in Seerr
-  if (api === '/status') return send(res, 200, { version: 'mock-1.0', commitTag: 'mock', updateAvailable: false });
+  if (api === '/status') {
+    // statusMode 'html': something that answers 200 but is not Seerr; 'noversion': JSON without the Seerr fields
+    if (settings.statusMode === 'html') return send(res, 200, '<html><body>not seerr</body></html>');
+    if (settings.statusMode === 'noversion') return send(res, 200, { hello: 'world' });
+    return send(res, 200, { version: 'mock-1.0', commitTag: 'mock', updateAvailable: false });
+  }
+  // public too, like in Seerr
+  if (api === '/settings/public') return send(res, 200, { initialized: settings.initialized, mediaServerType: settings.mediaServerType, applicationTitle: 'Seerr' });
 
   if (req.headers['x-api-key'] !== KEY) return send(res, 403, { message: 'You do not have permission to access this endpoint' });
   const asUser = req.headers['x-api-user'] || null;
+
+  // the administrator settings that hold the Application URL
+  if (api === '/settings/main' && req.method === 'GET') return send(res, 200, { applicationTitle: 'Seerr', applicationUrl: settings.appUrl, csrfProtection: false });
 
   if (api === '/user' && req.method === 'GET') {
     const results = Object.entries(linked).map(([jf, id]) => ({ id, jellyfinUserId: jf, displayName: 'user' + id }));

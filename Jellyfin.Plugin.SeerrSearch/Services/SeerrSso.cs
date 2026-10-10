@@ -78,6 +78,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                     _frameBlocked = false;
                     _probeSummary = string.Empty;
                     _probedUtc = DateTime.MinValue;
+                    PublicUrls.SetSeerrFromSeerr(string.Empty);
                     StartProbe();
                 };
             }
@@ -163,15 +164,36 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         /// <summary>Probes now and stores the answer, unless the public URL changed in the meantime (then the next call probes again).</summary>
         public async Task ProbeNowAsync()
         {
-            var url = UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl);
+            await RefreshApplicationUrlAsync().ConfigureAwait(false);
+
+            var url = PublicUrls.Seerr;
             var result = await ProbeAsync(url).ConfigureAwait(false);
 
-            if (url == UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl))
+            if (url == PublicUrls.Seerr)
             {
                 _proxyMode = result.Relay;
                 _frameBlocked = result.FrameBlocked;
                 _probeSummary = result.Summary;
                 _probedUtc = DateTime.UtcNow;
+            }
+        }
+
+        /// <summary>Reads Seerr\u0027s own "Application URL" (used as the public address when the administrator left it empty).</summary>
+        private async Task RefreshApplicationUrlAsync()
+        {
+            if (!SeerrClient.IsConfigured || UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl).Length > 0)
+            {
+                PublicUrls.SetSeerrFromSeerr(string.Empty);
+                return;
+            }
+
+            try
+            {
+                PublicUrls.SetSeerrFromSeerr(await _seerr.GetApplicationUrlAsync().ConfigureAwait(false));
+            }
+            catch (Exception)
+            {
+                // Optional information: keep what we had.
             }
         }
 
@@ -283,7 +305,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         private static string PublicJellyfinHost => HostOf(Plugin.Instance?.Configuration.JellyfinPublicUrl);
 
-        private static string PublicSeerrHost => HostOf(Plugin.Instance?.Configuration.SeerrPublicUrl);
+        private static string PublicSeerrHost => HostOf(PublicUrls.Seerr);
 
         /// <summary>True when both public addresses are on the same host (they only differ by port or path).</summary>
         public static bool SameHost =>
@@ -386,7 +408,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             // In relay mode the ticket is redeemed on Seerr's host; otherwise on Jellyfin's.
             var config = Plugin.Instance!.Configuration;
-            var origin = UrlUtil.Normalize(ProxyMode ? config.SeerrPublicUrl : config.JellyfinPublicUrl);
+            var origin = ProxyMode ? PublicUrls.Seerr : UrlUtil.Normalize(config.JellyfinPublicUrl);
             return origin + "/" + Plugin.PluginRoute + "/sso?t=" + id;
         }
 
@@ -459,13 +481,13 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             var nameValue = sessionCookie.Split(';', 2)[0].Trim();
             var config = Plugin.Instance?.Configuration;
-            var seerrIsHttps = UrlUtil.Normalize(config?.SeerrPublicUrl).StartsWith("https:", StringComparison.OrdinalIgnoreCase);
+            var seerrIsHttps = PublicUrls.Seerr.StartsWith("https:", StringComparison.OrdinalIgnoreCase);
             var relay = ProxyMode;
 
             // The cookie is set by the host the browser is talking to when it redeems the ticket: Seerr's in relay mode,
             // Jellyfin's otherwise. "Secure" only if that host is reached over https (a browser drops a Secure cookie set
             // over plain http) AND Seerr itself is over https (a Secure cookie is never sent to a plain-http Seerr).
-            var settingIsHttps = UrlUtil.Normalize(relay ? config?.SeerrPublicUrl : config?.JellyfinPublicUrl)
+            var settingIsHttps = (relay ? PublicUrls.Seerr : UrlUtil.Normalize(config?.JellyfinPublicUrl))
                 .StartsWith("https:", StringComparison.OrdinalIgnoreCase);
             var secure = settingIsHttps && seerrIsHttps;
 

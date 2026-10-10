@@ -291,6 +291,52 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             return "network";
         }
 
+        /// <summary>
+        /// The "Application URL" of Seerr (Settings → General), the address its own users type, or an empty string when it
+        /// is not set or cannot be read. Used as the public address when the administrator did not type one.
+        /// </summary>
+        public async Task<string> GetApplicationUrlAsync(CancellationToken ct = default)
+        {
+            var response = await GetAsync("/settings/main", null, ct).ConfigureAwait(false);
+            if (!response.IsSuccess)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return UrlUtil.Normalize(response.AsNode()?["applicationUrl"]?.GetValue<string>());
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+            {
+                return string.Empty;
+            }
+        }
+
+        /// <summary>
+        /// What Seerr says about its own setup (public endpoint): whether the first-run wizard was finished and which media
+        /// server it uses (1 Plex, 2 Jellyfin, 3 Emby, 4 not chosen yet). Null values when Seerr does not tell.
+        /// </summary>
+        public async Task<(bool? Initialized, int? MediaServerType)> GetSetupAsync(CancellationToken ct = default)
+        {
+            var response = await GetAsync("/settings/public", null, ct).ConfigureAwait(false);
+            if (!response.IsSuccess)
+            {
+                return (null, null);
+            }
+
+            var node = response.AsNode();
+
+            try
+            {
+                return (node?["initialized"]?.GetValue<bool>(), node?["mediaServerType"]?.GetValue<int>());
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidOperationException)
+            {
+                return (null, null);
+            }
+        }
+
         /// <summary>Paged list of the Seerr users (the API key has admin rights).</summary>
         public async Task<IReadOnlyList<JsonNode>> GetUsersAsync(CancellationToken ct = default)
         {

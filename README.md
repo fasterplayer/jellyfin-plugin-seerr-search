@@ -12,6 +12,25 @@ permissions and approval rules keep applying per user.
 
 ![Seerr results under the Jellyfin search](docs/screenshots/search-en.png)
 
+## Quick start
+
+1. Dashboard → Plugins → Repositories → add
+   `https://raw.githubusercontent.com/fasterplayer/jellyfin-plugin-seerr-search/main/manifest.json`, then install
+   **Seerr Search** from the catalog and restart Jellyfin.
+2. Dashboard → Plugins → **Seerr Search**. The page looks for Seerr by itself (container names `seerr`, `jellyseerr`,
+   `overseerr`, this machine, the Docker host, on port 5055) and **fills in its address**.
+3. Paste the **API key** (Seerr → Settings → General → API Key).
+4. Click **Save and test**. A green *Ready* message means it works: your users can search Seerr from the Jellyfin
+   search page. Users who have no Seerr account yet are created with the **Import** button on the same page.
+
+![Quick start](docs/screenshots/quickstart-en.png)
+
+That is all: **two fields** (one, when Seerr is found automatically). Everything else is under *Advanced settings*,
+folded by default, with good defaults: the public addresses, the automatic sign-in, the language, 4K, the messages.
+If Seerr is not found (another machine, a name of your own), type its address: `http://seerr:5055` when both run in
+Docker on one network, otherwise `http://<IP of the machine that runs Seerr>:5055` (see
+[Docker: which Seerr URL?](#docker-which-seerr-url)). The page tells you what to fix when the test fails.
+
 ## How identity works
 
 The browser never talks to Seerr. It calls the plugin, which Jellyfin already protects with its own
@@ -36,30 +55,41 @@ the request.
    `https://raw.githubusercontent.com/fasterplayer/jellyfin-plugin-seerr-search/main/manifest.json`
 2. Install **Seerr Search** from the catalog.
 3. Restart Jellyfin.
-4. Dashboard → Plugins → Seerr Search: enter the Seerr URL and the API key, save, then **Test the connection**.
+4. Dashboard → Plugins → Seerr Search: see the [Quick start](#quick-start) above.
 
 Until the URL and the key are filled in, the plugin does nothing: the web client is not modified and
 your users see no change.
 
 ## Configuration
 
-![Configuration page](docs/screenshots/config-en.png)
+The two settings you need, at the top of the page (*Quick start*):
 
 | Setting | Purpose |
 |---|---|
-| Seerr URL | Address of Seerr **as seen from the Jellyfin server**, e.g. `http://seerr:5055` (same Docker network) or `http://192.168.1.10:5055`. Never `localhost` in Docker. Only `http` and `https`, nothing after the port; a trailing `/api/v1` is dropped. |
+| Seerr URL | Address of Seerr **as seen from the Jellyfin server**, e.g. `http://seerr:5055` (same Docker network) or `http://192.168.1.10:5055`. Never `localhost` in Docker. Found automatically when possible (**Look for Seerr**). A missing `http://` is added; only `http` and `https`, nothing after the port; a trailing `/api/v1` is dropped. |
 | API key | Seerr → Settings → General → API Key. Stays on the server; the form never shows it again (leave the field empty to keep it). |
-| Public Seerr URL | Optional. The address your users type **in their browser** to reach Seerr. Used by the "Open in Seerr" link and the automatic sign-in. |
-| Public Jellyfin URL | Optional. The address your users type in their browser to reach Jellyfin. With a public Seerr URL, enables the automatic sign-in (see below). |
-| My reverse proxy relays `/SeerrSearch/` | Optional. Normally detected by itself. Tick it only if the connection test says the server cannot reach Seerr's public address (no loop-back on your network) although your proxy does forward the path. |
-| Language | Optional TMDB code (`en`, `fr`, `fr-CA`…) for titles and overviews. **Empty = each user's Jellyfin interface language.** |
+
+Everything below is under **Advanced settings** (folded; it opens by itself when something in it is not the default):
+
+![Configuration page, advanced settings unfolded](docs/screenshots/config-en.png)
+
+| Setting | Purpose |
+|---|---|
+| Enable the plugin | On by default. |
+| Public Seerr URL | The address your users type **in their browser** to reach Seerr. **Empty = the *Application URL* of Seerr's own settings** (Seerr → Settings → General), when it has one. Used by the "Open in Seerr" link and the automatic sign-in. |
+| Public Jellyfin URL | The address your users type in their browser to reach Jellyfin. With a public Seerr address, enables the automatic sign-in (see below). The page offers the address you opened it at (**Use …** button). |
+| My reverse proxy relays `/SeerrSearch/` | Normally detected by itself. Tick it only if the connection test says the server cannot reach Seerr's public address (no loop-back on your network) although your proxy does forward the path. |
+| Show the "Open in Seerr" link | Even without the automatic sign-in. Shown by itself when the address comes from Seerr. |
+| Language | TMDB code (`en`, `fr`, `fr-CA`…) for titles and overviews. **Empty = each user's Jellyfin interface language.** |
 | Minimum characters / maximum results | When Seerr is queried and how many cards are shown. |
 | Hide titles already in the library | Jellyfin already lists them just above. |
 | Allow 4K requests | Adds a "Request in 4K" button. Seerr still applies its own per-user permissions. |
 | Users who have no Seerr account | Show a short message (default, optionally your own text) or show nothing. |
-| Show the "Open in Seerr" link | Even without the automatic sign-in. |
 | Do not inject the script | Only if another plugin takes care of the injection. |
 
+**Save and test** saves the whole page and runs the connection test. The test names what is wrong (see
+[Troubleshooting](#troubleshooting)) and warns when Seerr itself is not ready for Jellyfin accounts (first-run wizard
+not finished, or set up for Plex).
 ### Users must exist in Seerr
 
 A Jellyfin user who has no Seerr account sees a short message (or nothing, if you chose so) and no button.
@@ -236,7 +266,14 @@ connection test, the user import, a search, a request, the "Open in Seerr" tap a
 | D | Jellyfin with base URL `/jellyfin`, direct; and behind nginx with Seerr on its own host | OK |
 | D | Seerr under a sub-path | not supported by Seerr |
 | E | Cookie attributes for http/https on every mode (10 combinations) and the frame on https | OK |
+| F (1.3) | Guided first installation in the browser, empty configuration: Seerr found and its address filled in, only the key typed, one click, search works for a linked user; the same in French; wrong key, closed port, unknown host, `localhost`, a page that is not Seerr, a Seerr set up for Plex, an address without `http://`; folded/unfolded advanced settings; "no Seerr found" and "search failed" states | OK (run against a copy of the real Jellyfin 12.2 and a fake Seerr; see below) |
+| G (1.3) | Public Seerr address read from Seerr's *Application URL* (used, ignored when empty, ignored when hostile, beaten by a typed address); warnings for Seerr not initialized / Plex | OK (fake Seerr) |
+| H (1.3) | A real Seerr 3.5.0, **read only**: search, posters, key check, user counts, address search finds it, Application URL read, no warning | OK; no request was created |
 | Extra | Seerr with CSRF protection on; two users signing in one after the other; Seerr's proxy forbidding frames; server unable to reach its public address; update from 1.1.0.0 through the catalog | OK |
+
+Rows F and G ran against a copy of a real Jellyfin 12.2 with a fake Seerr (`tests/mock-seerr.mjs`) that mimics the calls the
+plugin makes; row H against a real Seerr 3.5.0 with nothing written. The address search and the Application URL have
+**not** been run against a brand-new real Seerr installation.
 
 **Not tested**: Jellyfin 10.11 (the build compiles, nothing more), Jellyseerr and Overseerr, the Jellyfin mobile and TV
 apps, authentication proxies in front of Seerr, a real Cloudflare tunnel, IPv6 addresses, Seerr with Jellyfin sign-in
@@ -252,10 +289,14 @@ Other languages fall back to English. To add one, add a block to `STRINGS` in
 
 - The API key stays on the server: it is not part of any answer to the browser, and the configuration
   form does not load it back.
+- The address search (`detect`) is for administrators only, tries a fixed list of usual addresses on port 5055
+  (container names, this machine, the container gateway, the host name the dashboard was opened at), never sends the
+  API key, and accepts a candidate only if `/api/v1/status` answers like Seerr. Seerr's Application URL is validated
+  like any address (plain http/https, no credentials, no query) and kept in memory only.
 - Every endpoint requires a valid Jellyfin session, except three that return nothing private:
   `script` (the client script, loaded by a plain script tag), `ping` (a fixed string) and `sso` (it only
-  redeems a one-time ticket obtained by an authenticated user). `status` and `import-users` are
-  administrators only.
+  redeems a one-time ticket obtained by an authenticated user). `status`, `detect` and
+  `import-users` are administrators only.
 - The Seerr user a call acts for is always derived from the authenticated Jellyfin user, never from
   anything the browser sends.
 - Seerr and public URLs are validated (plain `http`/`https`, no credentials, no query) and only
@@ -288,7 +329,12 @@ the injection. The script relies on three elements of the web client's search pa
   `[Seerr Search]`. Make sure the user has a Seerr account.
 - **The section appears but searching fails.** Seerr must be reachable from the Jellyfin *server* (not from
   the browser): use the Docker service name or the LAN address.
-- **Test the connection says something is wrong.** The message names the address it tried:
+- **Look for Seerr finds nothing.** Seerr runs somewhere the usual names do not reach (another machine, a name of your
+  own, a port other than 5055): type its address. Between Docker containers, put both on one network.
+- **A warning appears after the test.** *Seerr has not finished its first-run setup*: open Seerr and complete its
+  wizard with your Jellyfin server. *Set up for Plex*: Jellyfin accounts cannot match Seerr users; use a Seerr that
+  is set up for Jellyfin.
+- **Save and test says something is wrong.** The message names the address it tried:
 
   | Message | Meaning and fix |
   |---|---|
@@ -321,7 +367,7 @@ dotnet build Jellyfin.Plugin.SeerrSearch/Jellyfin.Plugin.SeerrSearch.csproj -c R
 language, and forwards Quick Connect to a real Jellyfin) that can be used to try the plugin without a real
 Seerr; see the header of the file.
 
-A release is made by pushing a tag equal to the version (`1.2.0.0`): the workflow builds, checks that the
+A release is made by pushing a tag equal to the version (`1.3.0.0`): the workflow builds, checks that the
 tag, `Directory.Build.props` and `build.yaml` agree, publishes the zip and adds the version (with its
 checksum) to `manifest.json`.
 

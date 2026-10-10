@@ -28,6 +28,7 @@ namespace Jellyfin.Plugin.SeerrSearch
 
             serviceCollection.AddSingleton<RateLimiter>();
             serviceCollection.AddSingleton<SeerrClient>();
+            serviceCollection.AddSingleton<SeerrDetector>();
             serviceCollection.AddSingleton<SeerrUserMap>();
             serviceCollection.AddSingleton<SeerrSso>();
             serviceCollection.AddSingleton<IStartupFilter, ScriptInjectionStartupFilter>();

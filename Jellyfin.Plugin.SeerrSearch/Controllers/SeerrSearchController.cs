@@ -45,10 +45,12 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
         private const int SearchesPerMinute = 60;
         private const int RequestsPerMinute = 20;
         private const int ImagesPerMinute = 600;
+        private const int DetectsPerMinute = 12;
 
         private readonly SeerrClient _seerr;
         private readonly SeerrUserMap _userMap;
         private readonly SeerrSso _sso;
+        private readonly SeerrDetector _detector;
         private readonly RateLimiter _limiter;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly ILogger<SeerrSearchController> _logger;
@@ -57,6 +59,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             SeerrClient seerr,
             SeerrUserMap userMap,
             SeerrSso sso,
+            SeerrDetector detector,
             RateLimiter limiter,
             IHttpClientFactory httpClientFactory,
             ILogger<SeerrSearchController> logger)
@@ -64,6 +67,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             _seerr = seerr;
             _userMap = userMap;
             _sso = sso;
+            _detector = detector;
             _limiter = limiter;
             _httpClientFactory = httpClientFactory;
             _logger = logger;
@@ -131,12 +135,12 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 maxResults = Math.Clamp(config.MaxResults, 1, 60),
                 hideAvailable = config.HideAvailable,
                 allow4k = config.Allow4k,
-                publicUrl = UrlUtil.Normalize(config.SeerrPublicUrl),
+                publicUrl = PublicUrls.Seerr,
                 sso = _sso.IsReady,
                 ssoMode = _sso.Mode,
                 seerrHost = SeerrSso.PublicSeerrHostName,
                 frameBlocked = _sso.FrameBlocked,
-                showSeerrLink = config.ShowSeerrLink || _sso.IsReady,
+                showSeerrLink = config.ShowSeerrLink || _sso.IsReady || PublicUrls.SeerrIsFromSeerr,
                 language = config.Language ?? string.Empty
             });
         }
@@ -389,9 +393,18 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             var importable = await _seerr.GetImportableJellyfinUserIdsAsync(ct).ConfigureAwait(false);
             int? unlinked = importable?.Count(id => !_userMap.IsMapped(id));
 
+            // Seerr must be set up with Jellyfin for the accounts to match: say so instead of leaving a mystery.
+            var setup = await _seerr.GetSetupAsync(ct).ConfigureAwait(false);
+            string? warning = setup.Initialized == false || setup.MediaServerType == 4
+                ? "seerr-not-initialized"
+                : setup.MediaServerType == 1 ? "seerr-plex" : null;
+
             return new JsonResult(new
             {
                 ok = true,
+                warning,
+                publicUrl = PublicUrls.Seerr,
+                publicUrlFromSeerr = PublicUrls.SeerrIsFromSeerr,
                 version = SafeString(status.AsNode()?["version"]),
                 linkedUsers = _userMap.MappedUserCount,
                 unlinkedUsers = unlinked,
@@ -402,6 +415,28 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 ssoPublicHost = SeerrSso.PublicSeerrHostName,
                 frameBlocked = _sso.FrameBlocked
             });
+        }
+
+        /// <summary>
+        /// Looks for a Seerr on the usual addresses (administrators only), so that the configuration page can offer the URL
+        /// instead of asking for it. Nothing is stored.
+        /// </summary>
+        [HttpGet("detect")]
+        [Authorize]
+        public async Task<ActionResult> Detect(CancellationToken ct)
+        {
+            if (!IsAdministrator())
+            {
+                return StatusCode((int)HttpStatusCode.Forbidden);
+            }
+
+            if (!_limiter.Allow("detect", GetJellyfinUserId(), DetectsPerMinute))
+            {
+                return StatusCode((int)HttpStatusCode.TooManyRequests, new { error = "rate-limited" });
+            }
+
+            var found = await _detector.DetectAsync(Request.Host.Host, ct).ConfigureAwait(false);
+            return new JsonResult(new { found = found.Select(d => new { url = d.Url, version = d.Version }) });
         }
 
         /// <summary>
@@ -551,7 +586,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
         public async Task<ActionResult> Sso([FromQuery] string? t, [FromQuery] int hop = 0, CancellationToken ct = default)
         {
             var config = Plugin.Instance?.Configuration;
-            var seerrPublic = UrlUtil.Normalize(config?.SeerrPublicUrl);
+            var seerrPublic = PublicUrls.Seerr;
             if (config == null || seerrPublic.Length == 0)
             {
                 return NotFound();
@@ -562,7 +597,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             // The cookie is only worth something if it is set from the right host: Seerr's in
             // relay mode, Jellyfin's in domain mode. Arriving through another address (a local
             // IP, say), we go back through the right host without redeeming the ticket — once.
-            var expectedOrigin = UrlUtil.Normalize(_sso.ProxyMode ? config.SeerrPublicUrl : config.JellyfinPublicUrl);
+            var expectedOrigin = _sso.ProxyMode ? seerrPublic : UrlUtil.Normalize(config.JellyfinPublicUrl);
             if (!Uri.TryCreate(expectedOrigin, UriKind.Absolute, out var expectedUri))
             {
                 return Redirect(loginPage);

@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.0.0
+
+Made simple to set up: two fields at most, everything else optional and folded. An existing configuration behaves
+exactly as before (the settings, their names and their defaults are unchanged).
+
+- New: **Quick start** at the top of the configuration page. Seerr is looked for on the usual addresses (container
+  names `seerr`, `jellyseerr`, `overseerr`, this machine, the Docker host, the container gateway, the
+  host name the dashboard was opened at; port 5055) the first time the page is opened, and its address is filled in.
+  A **Look for Seerr** button repeats the search and offers each answer. Administrators only, fixed list of
+  candidates, no API key sent, a candidate counts only if it answers like Seerr.
+- New: one **Save and test** button saves the page and runs the connection test; a green *Ready* message tells the
+  administrator it works. A missing `http://` on the Seerr address is added.
+- New: the **advanced settings** (public addresses, automatic sign-in, language, limits, 4K, messages, injection) are
+  folded under one heading and open by themselves when one of them is not the default.
+- New: the public Seerr address is taken from **Seerr's own *Application URL*** when the field is left empty (typed
+  value first; hostile or malformed values are ignored). The "Open in Seerr" link then shows by itself.
+- New: the page offers the address it was opened at as the public Jellyfin URL.
+- New: the test **warns** when Seerr has not finished its first-run setup or is set up for Plex (then no Jellyfin
+  account can match).
+- Changed: messages say what to fix in the field they concern; the automatic sign-in is described as optional and its
+  "not available" reason says that search and requests work without it; a wrong key says to copy the whole key.
+- Tests: the suite gained the guided installation in the browser (English and French), the address search with its
+  counter-tests (a page that is not Seerr, JSON without a version, Seerr stopped, rate limit, non-administrators),
+  the Application URL (used, empty, hostile, outranked by a typed address) and the warnings; the fake Seerr serves
+  `/settings/public` and `/settings/main`.
 ## 1.2.0.0
 
 Made for installations that are not the author's: a plain LAN with IP addresses, Docker, other reverse proxies, a
