@@ -1,0 +1,17 @@
+# Seerr Search - Caddy. HTTPS certificates are handled by Caddy itself.
+# Replace the host names, and jellyfin:8096 / seerr:5055 by the address of each application as Caddy sees it.
+# Caddy passes the original Host header to the backend by default.
+
+jellyfin.example.com {
+	reverse_proxy jellyfin:8096
+}
+
+seerr.example.com {
+	# The only block that is specific to Seerr Search: this path goes to JELLYFIN, not to Seerr.
+	handle /SeerrSearch/* {
+		reverse_proxy jellyfin:8096
+	}
+	handle {
+		reverse_proxy seerr:5055
+	}
+}

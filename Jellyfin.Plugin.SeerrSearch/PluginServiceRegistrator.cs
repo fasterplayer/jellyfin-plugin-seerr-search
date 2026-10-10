@@ -18,7 +18,12 @@ namespace Jellyfin.Plugin.SeerrSearch
             serviceCollection.AddHttpClient(SeerrClient.NamedClient)
                 .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
                 {
-                    AllowAutoRedirect = false
+                    AllowAutoRedirect = false,
+
+                    // Seerr answers Quick Connect with a session cookie. The handler is pooled and shared: with a cookie
+                    // container, the session of one user would be sent back to Seerr when the next user signs in, Seerr
+                    // would re-use that session, and the first user's browser cookie would turn into the second user.
+                    UseCookies = false
                 });
 
             serviceCollection.AddSingleton<RateLimiter>();

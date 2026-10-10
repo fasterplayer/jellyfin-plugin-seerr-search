@@ -1,0 +1,19 @@
+# Seerr Search - Nginx Proxy Manager.
+#
+# 1. Proxy Host "jellyfin.example.com" -> Forward Hostname jellyfin, port 8096, Websockets Support ON. Nothing special.
+# 2. Proxy Host "seerr.example.com"    -> Forward Hostname seerr, port 5055, Websockets Support ON,
+#    then open its "Advanced" tab and paste the block below into "Custom Nginx Configuration".
+#    (Replace jellyfin:8096 by the address of Jellyfin as NPM sees it: container name on the same Docker network, or IP:port.)
+
+# Alternative without any nginx syntax (also tested): on the same Seerr proxy host, open "Custom locations" -> "Add location":
+#    Define location  /SeerrSearch/   (keep the trailing slash)
+#    Scheme http, Forward Hostname / IP = Jellyfin as NPM sees it, Forward Port 8096, leave the gear box empty.
+#    NPM adds the Host and forwarded headers by itself. Use ONE of the two ways, not both.
+
+location /SeerrSearch/ {
+    proxy_pass http://jellyfin:8096;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}

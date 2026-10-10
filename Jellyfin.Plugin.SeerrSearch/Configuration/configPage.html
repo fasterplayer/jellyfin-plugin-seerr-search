@@ -8,7 +8,7 @@
 <div id="SeerrSearchConfigPage" data-role="page" class="page type-interior pluginConfigurationPage">
     <div data-role="content">
         <div class="content-primary">
-            <form id="SeerrSearchConfigForm">
+            <form id="SeerrSearchConfigForm" novalidate>
                 <div class="verticalSection">
                     <h2 class="sectionTitle">Seerr Search</h2>
                     <p class="fieldDescription" data-i18n="intro">
@@ -27,7 +27,7 @@
 
                 <div class="inputContainer">
                     <input is="emby-input" type="url" id="SeerrUrl" data-i18n-label="seerrUrl" label="Seerr URL (as seen from the Jellyfin server)" placeholder="http://seerr:5055"/>
-                    <div class="fieldDescription" data-i18n="seerrUrlHelp">For example http://seerr:5055 when both containers share a Docker network, or http://192.168.1.10:5055. Only http and https are accepted.</div>
+                    <div class="fieldDescription" data-i18n="seerrUrlHelp">The address the Jellyfin SERVER uses to reach Seerr. Same Docker network: the container name, http://seerr:5055. Otherwise the IP address of the machine that runs Seerr: http://192.168.1.10:5055. Never localhost (inside Docker, that is the Jellyfin container itself). Start with http:// or https://, nothing after the port.</div>
                 </div>
 
                 <div class="inputContainer">
@@ -38,12 +38,20 @@
 
                 <div class="inputContainer">
                     <input is="emby-input" type="url" id="SeerrPublicUrl" data-i18n-label="publicUrl" label="Public Seerr URL (optional)" placeholder="https://seerr.example.com"/>
-                    <div class="fieldDescription" data-i18n="publicUrlHelp">Used by the "Open in Seerr" link, for example https://seerr.example.com.</div>
+                    <div class="fieldDescription" data-i18n="publicUrlHelp">The address your users type in THEIR browser to open Seerr, for example https://seerr.example.com or http://192.168.1.10:5055. Used by the "Open in Seerr" link (tick the box below to show it when there is no automatic sign-in) and by the automatic sign-in.</div>
                 </div>
 
                 <div class="inputContainer">
                     <input is="emby-input" type="url" id="JellyfinPublicUrl" data-i18n-label="jellyfinUrl" label="Public Jellyfin URL (optional)" placeholder="https://jellyfin.example.com"/>
-                    <div class="fieldDescription" data-i18n="jellyfinUrlHelp">With a public Seerr URL, tapping a card opens Seerr already signed in (Quick Connect, no password). Two ways: either the proxy in front of Seerr forwards /SeerrSearch/ to Jellyfin (detected automatically, preferred), or Jellyfin and Seerr share a parent domain (jellyfin.example.com and seerr.example.com) and this URL is filled in. Quick Connect must be enabled in Jellyfin.</div>
+                    <div class="fieldDescription" data-i18n="jellyfinUrlHelp">The address your users type in their browser to open Jellyfin. With a public Seerr URL, tapping a card opens Seerr already signed in (Quick Connect, no password). It works when: the proxy in front of Seerr forwards /SeerrSearch/ to Jellyfin (detected automatically, preferred); or Jellyfin and Seerr are on the same host with different ports (http://192.168.1.10:8096 and http://192.168.1.10:5055); or they are subdomains of one domain (jellyfin.example.com and seerr.example.com). Quick Connect must be enabled in Jellyfin.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input is="emby-checkbox" type="checkbox" id="AssumeRelay"/>
+                        <span data-i18n="assumeRelay">My reverse proxy relays /SeerrSearch/ on Seerr's address</span>
+                    </label>
+                    <div class="fieldDescription checkboxFieldDescription" data-i18n="assumeRelayHelp">Normally detected by itself. Tick it only if the test says it cannot reach Seerr's public address from this server (some networks do not loop back to their own public address) while your proxy does forward /SeerrSearch/ to Jellyfin.</div>
                 </div>
 
                 <div class="inputContainer">
@@ -138,14 +146,16 @@
                     intro: 'Shows Seerr results under the Jellyfin search, with a Request button. Each request is created as the Seerr account linked to the signed-in Jellyfin user.',
                     enabled: 'Enable the plugin',
                     seerrUrl: 'Seerr URL (as seen from the Jellyfin server)',
-                    seerrUrlHelp: 'For example http://seerr:5055 when both containers share a Docker network, or http://192.168.1.10:5055. Only http and https are accepted.',
+                    seerrUrlHelp: 'The address the Jellyfin SERVER uses to reach Seerr. Same Docker network: the container name, http://seerr:5055. Otherwise the IP address of the machine that runs Seerr: http://192.168.1.10:5055. Never localhost (inside Docker, that is the Jellyfin container itself). Start with http:// or https://, nothing after the port.',
                     apiKey: 'Seerr API key',
                     apiKeyHelp: 'Seerr → Settings → General → API Key. It stays on the server and is never sent to the users’ browsers.',
                     apiKeySaved: 'A key is saved. Leave this field empty to keep it.',
                     publicUrl: 'Public Seerr URL (optional)',
-                    publicUrlHelp: 'Used by the "Open in Seerr" link, for example https://seerr.example.com.',
+                    publicUrlHelp: 'The address your users type in THEIR browser to open Seerr, for example https://seerr.example.com or http://192.168.1.10:5055. Used by the "Open in Seerr" link (tick the box below to show it when there is no automatic sign-in) and by the automatic sign-in.',
                     jellyfinUrl: 'Public Jellyfin URL (optional)',
-                    jellyfinUrlHelp: 'With a public Seerr URL, tapping a card opens Seerr already signed in (Quick Connect, no password). Two ways: either the proxy in front of Seerr forwards /SeerrSearch/ to Jellyfin (detected automatically, preferred), or Jellyfin and Seerr share a parent domain (jellyfin.example.com and seerr.example.com) and this URL is filled in. Quick Connect must be enabled in Jellyfin.',
+                    jellyfinUrlHelp: 'The address your users type in their browser to open Jellyfin. With a public Seerr URL, tapping a card opens Seerr already signed in (Quick Connect, no password). It works when: the proxy in front of Seerr forwards /SeerrSearch/ to Jellyfin (detected automatically, preferred); or Jellyfin and Seerr are on the same host with different ports (http://192.168.1.10:8096 and http://192.168.1.10:5055); or they are subdomains of one domain (jellyfin.example.com and seerr.example.com). Quick Connect must be enabled in Jellyfin.',
+                    assumeRelay: 'My reverse proxy relays /SeerrSearch/ on Seerr’s address',
+                    assumeRelayHelp: 'Normally detected by itself. Tick it only if the test says it cannot reach Seerr’s public address from this server (some networks do not loop back to their own public address) while your proxy does forward /SeerrSearch/ to Jellyfin.',
                     language: 'Language of titles and overviews (optional)',
                     languageHelp: 'A TMDB code such as en, fr or fr-CA. Leave empty to follow each user’s Jellyfin interface language.',
                     minQuery: 'Minimum characters before querying Seerr',
@@ -176,20 +186,37 @@
                     importing: 'Importing…',
                     saved: 'Settings saved.',
                     badUrl: 'This is not a valid http or https URL: ',
+                    badUrlScheme: 'Start the address with http:// or https:// (for example http://seerr:5055): ',
+                    badUrlParts: 'Remove the user name, password, ? or # part from this address: ',
                     ok: 'Seerr {version} answers and the API key works.',
                     linked: '{n} Jellyfin account(s) linked to Seerr.',
                     unlinkedUsers: '{n} Jellyfin account(s) have no Seerr account yet: use the import button.',
                     ssoReady: 'Automatic sign-in to Seerr: ready ({mode}).',
                     ssoRelay: 'relay on Seerr’s host',
+                    ssoSameHost: 'same host, different ports',
                     ssoDomain: 'parent-domain cookie',
                     ssoOff: 'Automatic sign-in to Seerr: not available — ',
                     'seerr-not-configured': 'Seerr URL or API key missing.',
-                    'public-url-missing': 'the public Seerr URL is missing.',
+                    'public-url-missing': 'fill in the public Seerr URL (the address your users type in their browser).',
                     'quickconnect-disabled': 'Quick Connect is disabled in Jellyfin (Dashboard → General).',
-                    'jellyfin-url-missing': 'the public Jellyfin URL is missing (or a relay of /SeerrSearch/ on Seerr’s host).',
-                    'no-common-domain': 'the public Jellyfin and Seerr URLs share no parent domain, and Seerr’s host does not relay /SeerrSearch/.',
+                    'jellyfin-url-missing': 'fill in the public Jellyfin URL (the address your users type in their browser), or have the proxy in front of Seerr relay /SeerrSearch/ to Jellyfin.',
+                    'no-common-domain': 'Jellyfin ({jf}) and Seerr ({se}) are on different hosts with no parent domain in common, and Seerr’s address does not relay /SeerrSearch/. A browser cannot share a sign-in between two different hosts, so a tap on a card opens the detail sheet inside Jellyfin instead (requests and the “Open in Seerr” link work normally; nothing is broken). To get the automatic sign-in: same host with different ports, subdomains of one domain, or relay /SeerrSearch/ to Jellyfin (see the README).',
+                    probeUnreachable: ' The server could not reach Seerr’s public address: {probe}; if your proxy does relay /SeerrSearch/, tick “My reverse proxy relays /SeerrSearch/”.',
+                    frameBlocked: ' Seerr’s proxy forbids being shown in a frame: Seerr opens in a new tab.',
                     unreachable: 'Seerr does not answer{code}. Check the URL (it must be reachable from the Jellyfin server).',
-                    badKey: 'Seerr answers, but refuses the API key{code}.',
+                    'net-dns': 'Cannot find the host “{host}”. Check the spelling. Between Docker containers, use the container (service) name on a shared network; otherwise use the IP address of the machine that runs Seerr.',
+                    'net-refused': 'Connection refused by {host}: nothing is listening there. Check the port (Seerr uses 5055 by default) and that Seerr is running.',
+                    'net-timeout': 'No answer from {host} (timeout). A firewall may be blocking the connection, or the address is wrong.',
+                    'net-tls': 'The secure connection to {host} failed (certificate not trusted, or not an https port). Use the plain http:// address of Seerr on your network, or install a certificate this server trusts.',
+                    'net-network': 'Could not connect to {host}. Check the address and that Seerr is running.',
+                    loopbackHint: ' “localhost” here is the Jellyfin server itself (inside Docker: the Jellyfin container), not your computer. Use the Seerr container name (http://seerr:5055, same Docker network) or the IP address of the machine that runs Seerr.',
+                    redirect: '{host} redirects to {location}. Put that address in the field (a redirect to https:// means the https:// address is needed).',
+                    blocked: '{host} answers {code}: something in front of Seerr (a sign-in proxy, a firewall) refuses the connection. Use Seerr’s direct address on your network, not the one behind the sign-in.',
+                    'not-found': '{host} answers 404: this does not look like Seerr. Check the address and the port, and remove any path from the URL.',
+                    'not-seerr': '{host} answers, but it is not Seerr (the answer is not what Seerr sends). Check the port, and behind a proxy use Seerr’s own address.',
+                    'server-error': 'Seerr answers with an error ({code}). Look at Seerr’s logs.',
+                    'http-error': 'Unexpected answer from {host} (HTTP {code}).',
+                    badKey: 'Seerr answers, but refuses the API key{code}. Copy it again from Seerr → Settings → General → API Key.',
                     needsSave: 'URL or API key missing. Save the settings first.',
                     noAnswer: 'The Jellyfin server did not answer.',
                     forbidden: 'Administrator rights are required.',
@@ -201,14 +228,16 @@
                     intro: 'Affiche les résultats de Seerr sous la recherche Jellyfin, avec un bouton Demander. Chaque demande est créée au nom du compte Seerr lié à l’utilisateur Jellyfin connecté.',
                     enabled: 'Activer le plugin',
                     seerrUrl: 'URL de Seerr (vue depuis le serveur Jellyfin)',
-                    seerrUrlHelp: 'Par exemple http://seerr:5055 si les deux conteneurs partagent un réseau Docker, ou http://192.168.1.10:5055. Seuls http et https sont acceptés.',
+                    seerrUrlHelp: 'L’adresse que le SERVEUR Jellyfin utilise pour joindre Seerr. Même réseau Docker : le nom du conteneur, http://seerr:5055. Sinon l’adresse IP de la machine qui héberge Seerr : http://192.168.1.10:5055. Jamais localhost (dans Docker, c’est le conteneur Jellyfin lui-même). Commencez par http:// ou https://, rien après le port.',
                     apiKey: 'Clé API de Seerr',
                     apiKeyHelp: 'Seerr → Paramètres → Général → Clé API. Elle reste sur le serveur et n’est jamais envoyée au navigateur des utilisateurs.',
                     apiKeySaved: 'Une clé est enregistrée. Laissez ce champ vide pour la conserver.',
                     publicUrl: 'URL publique de Seerr (facultatif)',
-                    publicUrlHelp: 'Sert au lien « Ouvrir dans Seerr », par exemple https://seerr.exemple.com.',
+                    publicUrlHelp: 'L’adresse que vos utilisateurs tapent DANS LEUR navigateur pour ouvrir Seerr, par exemple https://seerr.exemple.com ou http://192.168.1.10:5055. Sert au lien « Ouvrir dans Seerr » (cochez la case plus bas pour l’afficher quand il n’y a pas de connexion automatique) et à la connexion automatique.',
                     jellyfinUrl: 'URL publique de Jellyfin (facultatif)',
-                    jellyfinUrlHelp: 'Avec une URL publique de Seerr, un appui sur une carte ouvre Seerr déjà connecté (Quick Connect, sans mot de passe). Deux façons : soit le proxy devant Seerr relaie /SeerrSearch/ vers Jellyfin (détecté tout seul, préférable), soit Jellyfin et Seerr partagent un domaine parent (jellyfin.exemple.com et seerr.exemple.com) et cette URL est remplie. Le Quick Connect doit être activé dans Jellyfin.',
+                    jellyfinUrlHelp: 'L’adresse que vos utilisateurs tapent dans leur navigateur pour ouvrir Jellyfin. Avec une URL publique de Seerr, un appui sur une carte ouvre Seerr déjà connecté (Quick Connect, sans mot de passe). Cela marche si : le proxy devant Seerr relaie /SeerrSearch/ vers Jellyfin (détecté tout seul, préférable) ; ou Jellyfin et Seerr sont sur la même machine avec des ports différents (http://192.168.1.10:8096 et http://192.168.1.10:5055) ; ou ce sont des sous-domaines d’un même domaine (jellyfin.exemple.com et seerr.exemple.com). Le Quick Connect doit être activé dans Jellyfin.',
+                    assumeRelay: 'Mon proxy inverse relaie /SeerrSearch/ sur l’adresse de Seerr',
+                    assumeRelayHelp: 'Normalement détecté tout seul. À cocher seulement si le test dit que ce serveur ne peut pas joindre l’adresse publique de Seerr (certains réseaux ne bouclent pas sur leur propre adresse publique) alors que votre proxy relaie bien /SeerrSearch/ vers Jellyfin.',
                     language: 'Langue des titres et résumés (facultatif)',
                     languageHelp: 'Un code TMDB comme en, fr ou fr-CA. Laissez vide pour suivre la langue de l’interface Jellyfin de chaque utilisateur.',
                     minQuery: 'Caractères minimum avant d’interroger Seerr',
@@ -239,20 +268,37 @@
                     importing: 'Import en cours…',
                     saved: 'Paramètres enregistrés.',
                     badUrl: 'Ce n’est pas une URL http ou https valide : ',
+                    badUrlScheme: 'Commencez l’adresse par http:// ou https:// (par exemple http://seerr:5055) : ',
+                    badUrlParts: 'Retirez le nom d’utilisateur, le mot de passe, la partie ? ou # de cette adresse : ',
                     ok: 'Seerr {version} répond et la clé API fonctionne.',
                     linked: '{n} compte(s) Jellyfin lié(s) à Seerr.',
                     unlinkedUsers: '{n} compte(s) Jellyfin n’ont pas encore de compte Seerr : utilisez le bouton d’import.',
                     ssoReady: 'Connexion automatique à Seerr : prête ({mode}).',
                     ssoRelay: 'relais sur l’hôte de Seerr',
+                    ssoSameHost: 'même machine, ports différents',
                     ssoDomain: 'cookie de domaine parent',
                     ssoOff: 'Connexion automatique à Seerr : non disponible — ',
                     'seerr-not-configured': 'URL ou clé API de Seerr manquante.',
-                    'public-url-missing': 'il manque l’URL publique de Seerr.',
+                    'public-url-missing': 'renseignez l’URL publique de Seerr (l’adresse que vos utilisateurs tapent dans leur navigateur).',
                     'quickconnect-disabled': 'le Quick Connect est désactivé dans Jellyfin (Tableau de bord → Général).',
-                    'jellyfin-url-missing': 'il manque l’URL publique de Jellyfin (ou un relais de /SeerrSearch/ sur l’hôte de Seerr).',
-                    'no-common-domain': 'les URL publiques de Jellyfin et de Seerr ne partagent pas de domaine parent, et l’hôte de Seerr ne relaie pas /SeerrSearch/.',
+                    'jellyfin-url-missing': 'renseignez l’URL publique de Jellyfin (l’adresse que vos utilisateurs tapent dans leur navigateur), ou faites relayer /SeerrSearch/ vers Jellyfin par le proxy devant Seerr.',
+                    'no-common-domain': 'Jellyfin ({jf}) et Seerr ({se}) sont sur des hôtes différents sans domaine parent commun, et l’adresse de Seerr ne relaie pas /SeerrSearch/. Un navigateur ne peut pas partager une connexion entre deux hôtes différents : un appui sur une carte ouvre donc la fiche à l’intérieur de Jellyfin (les demandes et le lien « Ouvrir dans Seerr » marchent normalement; rien n’est cassé). Pour avoir la connexion automatique : même machine avec des ports différents, sous-domaines d’un même domaine, ou relais de /SeerrSearch/ vers Jellyfin (voir le README).',
+                    probeUnreachable: ' Le serveur n’a pas pu joindre l’adresse publique de Seerr : {probe} ; si votre proxy relaie bien /SeerrSearch/, cochez « Mon proxy inverse relaie /SeerrSearch/ ».',
+                    frameBlocked: ' Le proxy de Seerr interdit l’affichage dans un cadre : Seerr s’ouvre dans un nouvel onglet.',
                     unreachable: 'Seerr ne répond pas{code}. Vérifiez l’URL (elle doit être joignable depuis le serveur Jellyfin).',
-                    badKey: 'Seerr répond, mais refuse la clé API{code}.',
+                    'net-dns': 'Impossible de trouver l’hôte « {host} ». Vérifiez l’orthographe. Entre conteneurs Docker, utilisez le nom du conteneur (service) sur un réseau commun ; sinon l’adresse IP de la machine qui héberge Seerr.',
+                    'net-refused': 'Connexion refusée par {host} : rien n’écoute à cette adresse. Vérifiez le port (5055 par défaut pour Seerr) et que Seerr tourne.',
+                    'net-timeout': 'Pas de réponse de {host} (délai dépassé). Un pare-feu bloque peut-être la connexion, ou l’adresse est fausse.',
+                    'net-tls': 'La connexion sécurisée à {host} a échoué (certificat non reconnu, ou ce n’est pas un port https). Utilisez l’adresse http:// de Seerr sur votre réseau, ou installez un certificat que ce serveur reconnaît.',
+                    'net-network': 'Connexion impossible à {host}. Vérifiez l’adresse et que Seerr tourne.',
+                    loopbackHint: ' « localhost » désigne ici le serveur Jellyfin lui-même (dans Docker : le conteneur Jellyfin), pas votre ordinateur. Utilisez le nom du conteneur Seerr (http://seerr:5055, même réseau Docker) ou l’adresse IP de la machine qui héberge Seerr.',
+                    redirect: '{host} redirige vers {location}. Mettez cette adresse dans le champ (une redirection vers https:// veut dire qu’il faut l’adresse https://).',
+                    blocked: '{host} répond {code} : quelque chose devant Seerr (proxy d’authentification, pare-feu) refuse la connexion. Utilisez l’adresse directe de Seerr sur votre réseau, pas celle placée derrière la connexion.',
+                    'not-found': '{host} répond 404 : cela ne ressemble pas à Seerr. Vérifiez l’adresse et le port, et retirez tout chemin de l’URL.',
+                    'not-seerr': '{host} répond, mais ce n’est pas Seerr (la réponse n’est pas celle de Seerr). Vérifiez le port, et derrière un proxy utilisez l’adresse propre de Seerr.',
+                    'server-error': 'Seerr répond par une erreur ({code}). Regardez les journaux de Seerr.',
+                    'http-error': 'Réponse inattendue de {host} (HTTP {code}).',
+                    badKey: 'Seerr répond, mais refuse la clé API{code}. Copiez-la de nouveau depuis Seerr → Paramètres → Général → Clé API.',
                     needsSave: 'URL ou clé API manquante. Enregistrez d’abord les paramètres.',
                     noAnswer: 'Le serveur Jellyfin n’a pas répondu.',
                     forbidden: 'Il faut les droits d’administrateur.',
@@ -308,7 +354,11 @@
                 document.querySelector(selector).textContent = message;
             }
 
+            // A slow answer of the connection test must not overwrite a newer message (a form error, a new test).
+            var statusSeq = 0;
+
             function status(message) {
+                statusSeq++;
                 setText('#SeerrStatusLine', message);
             }
 
@@ -320,9 +370,19 @@
                         parts.push(t('unlinkedUsers', { n: result.unlinkedUsers }));
                     }
 
-                    parts.push(result.sso
-                        ? t('ssoReady', { mode: result.ssoMode === 'proxy' ? t('ssoRelay') : t('ssoDomain') })
-                        : t('ssoOff') + t(result.ssoReason || 'seerr-not-configured'));
+                    if (result.sso) {
+                        var modeText = result.ssoMode === 'proxy' ? t('ssoRelay')
+                            : result.ssoMode === 'samehost' ? t('ssoSameHost') : t('ssoDomain');
+                        parts.push(t('ssoReady', { mode: modeText }) + (result.frameBlocked ? t('frameBlocked') : ''));
+                    } else {
+                        var reason = t(result.ssoReason || 'seerr-not-configured', { jf: hostOf(page_JellyfinPublic()), se: result.ssoPublicHost || '?' });
+
+                        if (result.ssoReason === 'no-common-domain' && /^unreachable/.test(result.ssoProbe || '')) {
+                            reason += t('probeUnreachable', { probe: result.ssoProbe });
+                        }
+
+                        parts.push(t('ssoOff') + reason);
+                    }
 
                     return parts.join(' ');
                 }
@@ -337,16 +397,46 @@
                     return t('badKey', { code: code });
                 }
 
+                var vars = { host: result.host || '?', code: result.code || '', location: result.location || '?' };
+
+                if (result.error === 'net-dns') {
+                    vars.host = vars.host.replace(/:\d+$/, '');
+                }
+
+                if (result.error && STRINGS.en[result.error]) {
+                    return t(result.error, vars) + (/^net-/.test(result.error) && result.loopback ? t('loopbackHint') : '');
+                }
+
                 return t('unreachable', { code: code });
+            }
+
+            function hostOf(value) {
+                try {
+                    return new URL(value).hostname;
+                } catch (e) {
+                    return '?';
+                }
+            }
+
+            function page_JellyfinPublic() {
+                var input = document.querySelector('#JellyfinPublicUrl');
+                return input ? input.value.trim() : '';
             }
 
             function runTest(target) {
                 target(t('testing'));
+                var mine = statusSeq;
+
+                function show(message) {
+                    if (mine === statusSeq) {
+                        target(message);
+                    }
+                }
 
                 return fetch(serverUrl('status'), { headers: authHeaders() })
                     .then(function (response) {
                         if (response.status === 403) {
-                            target(t('forbidden'));
+                            show(t('forbidden'));
                             return null;
                         }
 
@@ -354,11 +444,11 @@
                     })
                     .then(function (result) {
                         if (result) {
-                            target(describe(result));
+                            show(describe(result));
                         }
                     })
                     .catch(function () {
-                        target(t('noAnswer'));
+                        show(t('noAnswer'));
                     });
             }
 
@@ -374,6 +464,7 @@
                     page.querySelector('#SeerrPublicUrl').value = config.SeerrPublicUrl || '';
                     page.querySelector('#JellyfinPublicUrl').value = config.JellyfinPublicUrl || '';
                     page.querySelector('#Language').value = config.Language || '';
+                    page.querySelector('#AssumeRelay').checked = config.AssumeRelay === true;
                     page.querySelector('#MinQueryLength').value = config.MinQueryLength || 3;
                     page.querySelector('#MaxResults').value = config.MaxResults || 20;
                     page.querySelector('#HideAvailable').checked = config.HideAvailable !== false;
@@ -407,14 +498,21 @@
                     return true;
                 }
 
+                // The same rules as the server (UrlUtil): http(s) only, no user name, password, query or fragment.
                 try {
                     var url = new URL(value);
                     if (url.protocol === 'http:' || url.protocol === 'https:') {
+                        if (url.username || url.password || url.search || url.hash || /[?#]/.test(value)) {
+                            status(t('badUrlParts') + value);
+                            return false;
+                        }
+
                         return true;
                     }
                 } catch (e) { /* falls through */ }
 
-                status(t('badUrl') + value);
+                // No scheme at all ("seerr:5055", "192.168.1.10:5055", "seerr.lan"): say what to add.
+                status((/^[A-Za-z0-9._-]+(:\d+)?(\/.*)?$/.test(value) ? t('badUrlScheme') : t('badUrl')) + value);
                 return false;
             }
 
@@ -437,6 +535,7 @@
                     config.SeerrPublicUrl = page.querySelector('#SeerrPublicUrl').value.trim();
                     config.JellyfinPublicUrl = page.querySelector('#JellyfinPublicUrl').value.trim();
                     config.Language = page.querySelector('#Language').value.trim();
+                    config.AssumeRelay = page.querySelector('#AssumeRelay').checked;
                     config.MinQueryLength = parseInt(page.querySelector('#MinQueryLength').value, 10) || 3;
                     config.MaxResults = parseInt(page.querySelector('#MaxResults').value, 10) || 20;
                     config.HideAvailable = page.querySelector('#HideAvailable').checked;

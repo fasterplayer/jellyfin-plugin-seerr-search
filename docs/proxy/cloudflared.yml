@@ -1,0 +1,14 @@
+# Seerr Search - cloudflared (named tunnel). Rules are evaluated top to bottom and the first match wins:
+# the /SeerrSearch/ rule MUST come before the plain rule for Seerr's host.
+# In the Zero Trust dashboard (remotely managed tunnel) this is "Public hostnames": add a hostname
+# seerr.example.com with Path ^/SeerrSearch/ and service http://jellyfin:8096, and move it ABOVE the Seerr entry.
+# Replace the names, and jellyfin:8096 / seerr:5055 by the addresses cloudflared uses to reach each application.
+ingress:
+  - hostname: jellyfin.example.com
+    service: http://jellyfin:8096
+  - hostname: seerr.example.com
+    path: ^/SeerrSearch/
+    service: http://jellyfin:8096
+  - hostname: seerr.example.com
+    service: http://seerr:5055
+  - service: http_status:404

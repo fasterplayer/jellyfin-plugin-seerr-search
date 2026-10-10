@@ -45,10 +45,15 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             && !string.IsNullOrWhiteSpace(Config.ApiKey);
 
         // Only a plain http(s) URL is ever requested (see UrlUtil).
-        private static string BaseUrl => UrlUtil.Normalize(Config?.SeerrUrl);
+        private static string BaseUrl => UrlUtil.NormalizeSeerr(Config?.SeerrUrl);
 
         /// <summary>Raw result of a Seerr call: the JSON body and the HTTP status, untouched.</summary>
-        public sealed record SeerrResponse(HttpStatusCode StatusCode, string Body, IReadOnlyList<string> SetCookies)
+        /// <param name="Failure">
+        /// Set when no HTTP answer came back: "dns" (name not found), "refused" (nothing listens there), "timeout",
+        /// "tls" (certificate or protocol problem), or "network" (anything else). Used for the connection test.
+        /// </param>
+        /// <param name="Location">The Location header of a redirect (3xx), if any.</param>
+        public sealed record SeerrResponse(HttpStatusCode StatusCode, string Body, IReadOnlyList<string> SetCookies, string? Failure = null, string? Location = null)
         {
             public bool IsSuccess => (int)StatusCode >= 200 && (int)StatusCode < 300;
 
@@ -83,6 +88,49 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         public Task<SeerrResponse> PostAnonymousAsync(string path, object? body, CancellationToken ct = default)
             => SendAsync(HttpMethod.Post, path, body, null, true, ct);
 
+        /// <summary>The cookies and the token Seerr wants back on a POST when its "CSRF protection" setting is on.</summary>
+        public sealed record Csrf(string Cookie, string Token);
+
+        private Csrf? _csrf;
+        private string _csrfFor = string.Empty;
+        private DateTime _csrfUtc = DateTime.MinValue;
+
+        /// <summary>
+        /// With "CSRF protection" enabled in Seerr, a POST without a valid token is refused (403 "invalid csrf token"),
+        /// API key or not. A GET hands out the two cookies (_csrf and XSRF-TOKEN); the token is sent back in a header,
+        /// like Seerr's own web page does. The pair is kept for ten minutes (and renewed when Seerr refuses it).
+        /// Null when Seerr does not use CSRF protection.
+        /// </summary>
+        private async Task<Csrf?> GetCsrfAsync(bool renew, CancellationToken ct)
+        {
+            if (!renew && _csrfFor == BaseUrl && DateTime.UtcNow - _csrfUtc < TimeSpan.FromMinutes(10))
+            {
+                return _csrf;
+            }
+
+            var response = await SendCoreAsync(HttpMethod.Get, "/status", null, null, true, ct, null).ConfigureAwait(false);
+
+            string? token = null;
+            var pairs = new List<string>();
+            foreach (var cookie in response.SetCookies)
+            {
+                var pair = cookie.Split(';', 2)[0].Trim();
+                if (pair.StartsWith("_csrf=", StringComparison.Ordinal) || pair.StartsWith("XSRF-TOKEN=", StringComparison.Ordinal))
+                {
+                    pairs.Add(pair);
+                    if (pair.StartsWith("XSRF-TOKEN=", StringComparison.Ordinal))
+                    {
+                        token = Uri.UnescapeDataString(pair["XSRF-TOKEN=".Length..]);
+                    }
+                }
+            }
+
+            _csrf = token == null ? null : new Csrf(string.Join("; ", pairs), token);
+            _csrfFor = BaseUrl;
+            _csrfUtc = DateTime.UtcNow;
+            return _csrf;
+        }
+
         private async Task<SeerrResponse> SendAsync(
             HttpMethod method,
             string path,
@@ -90,6 +138,36 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             int? seerrUserId,
             bool anonymous,
             CancellationToken ct)
+        {
+            if (method == HttpMethod.Get || !IsConfigured)
+            {
+                return await SendCoreAsync(method, path, body, seerrUserId, anonymous, ct, null).ConfigureAwait(false);
+            }
+
+            var csrf = await GetCsrfAsync(false, ct).ConfigureAwait(false);
+            var response = await SendCoreAsync(method, path, body, seerrUserId, anonymous, ct, csrf).ConfigureAwait(false);
+
+            if (response.StatusCode == HttpStatusCode.Forbidden && response.Body.Contains("csrf", StringComparison.OrdinalIgnoreCase))
+            {
+                // The setting was switched on (or Seerr restarted) since the pair was kept: renew it once.
+                csrf = await GetCsrfAsync(true, ct).ConfigureAwait(false);
+                if (csrf != null)
+                {
+                    response = await SendCoreAsync(method, path, body, seerrUserId, anonymous, ct, csrf).ConfigureAwait(false);
+                }
+            }
+
+            return response;
+        }
+
+        private async Task<SeerrResponse> SendCoreAsync(
+            HttpMethod method,
+            string path,
+            object? body,
+            int? seerrUserId,
+            bool anonymous,
+            CancellationToken ct,
+            Csrf? csrf)
         {
             if (!IsConfigured)
             {
@@ -112,6 +190,12 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             }
 
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            if (csrf != null)
+            {
+                request.Headers.TryAddWithoutValidation("Cookie", csrf.Cookie);
+                request.Headers.TryAddWithoutValidation("XSRF-TOKEN", csrf.Token);
+            }
 
             if (body != null)
             {
@@ -143,18 +227,68 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                     ? values.ToList()
                     : new List<string>();
 
-                return new SeerrResponse(response.StatusCode, content, cookies);
+                var location = response.Headers.Location?.ToString();
+
+                return new SeerrResponse(response.StatusCode, content, cookies, null, location);
             }
             catch (TaskCanceledException) when (!ct.IsCancellationRequested)
             {
                 _logger.LogWarning("Timed out contacting Seerr ({Url})", url);
-                return new SeerrResponse(HttpStatusCode.GatewayTimeout, "{\"error\":\"Seerr did not answer in time.\"}", Array.Empty<string>());
+                return new SeerrResponse(HttpStatusCode.GatewayTimeout, "{\"error\":\"Seerr did not answer in time.\"}", Array.Empty<string>(), "timeout");
             }
             catch (HttpRequestException ex)
             {
-                _logger.LogWarning(ex, "Could not reach Seerr ({Url})", url);
-                return new SeerrResponse(HttpStatusCode.BadGateway, "{\"error\":\"Could not reach Seerr.\"}", Array.Empty<string>());
+                var kind = Classify(ex);
+                _logger.LogWarning("Could not reach Seerr ({Url}): {Kind} - {Reason}", url, kind, ex.InnerException?.Message ?? ex.Message);
+                return new SeerrResponse(HttpStatusCode.BadGateway, "{\"error\":\"Could not reach Seerr.\"}", Array.Empty<string>(), kind);
             }
+        }
+
+        /// <summary>Why a connection failed, in terms an administrator can act on.</summary>
+        public static string Classify(Exception ex)
+        {
+            if (ex is HttpRequestException http)
+            {
+                if (http.HttpRequestError == HttpRequestError.NameResolutionError)
+                {
+                    return "dns";
+                }
+
+                if (http.HttpRequestError == HttpRequestError.SecureConnectionError)
+                {
+                    return "tls";
+                }
+            }
+
+            Exception? inner = ex;
+            while (inner != null)
+            {
+                if (inner is System.Security.Authentication.AuthenticationException)
+                {
+                    return "tls";
+                }
+
+                if (inner is System.Net.Sockets.SocketException socket)
+                {
+                    switch (socket.SocketErrorCode)
+                    {
+                        case System.Net.Sockets.SocketError.HostNotFound:
+                        case System.Net.Sockets.SocketError.TryAgain:
+                        case System.Net.Sockets.SocketError.NoData:
+                            return "dns";
+                        case System.Net.Sockets.SocketError.ConnectionRefused:
+                            return "refused";
+                        case System.Net.Sockets.SocketError.TimedOut:
+                        case System.Net.Sockets.SocketError.HostUnreachable:
+                        case System.Net.Sockets.SocketError.NetworkUnreachable:
+                            return "timeout";
+                    }
+                }
+
+                inner = inner.InnerException;
+            }
+
+            return "network";
         }
 
         /// <summary>Paged list of the Seerr users (the API key has admin rights).</summary>

@@ -2,9 +2,9 @@
   <PropertyGroup>
     <!-- Shared by the assembly, the file and the package.
          Keep in sync with build.yaml; the release workflow checks it against the tag. -->
-    <Version>1.1.0.0</Version>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <FileVersion>1.1.0.0</FileVersion>
+    <Version>1.2.0.0</Version>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
     <Authors>fasterplayer</Authors>
     <Company>fasterplayer</Company>
     <Copyright>Copyright © 2026 fasterplayer</Copyright>

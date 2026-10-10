@@ -33,6 +33,10 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
     ///   - Domain mode: Jellyfin and Seerr share a parent domain (jellyfin.example.com and
     ///     seerr.example.com); the cookie is set by Jellyfin with Domain=example.com, which
     ///     the browser also sends to Seerr.
+    ///   - Same-host mode: Jellyfin and Seerr are on the same host and differ only by port
+    ///     (http://192.168.1.10:8096 and http://192.168.1.10:5055, or a name on the LAN). Cookies
+    ///     ignore the port, so a host-only cookie set by Jellyfin (no Domain attribute) is also
+    ///     sent to Seerr. This works with a bare IP address, which a Domain attribute cannot.
     /// </summary>
     public class SeerrSso
     {
@@ -50,6 +54,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
         private readonly ConcurrentDictionary<string, Ticket> _tickets = new(StringComparer.Ordinal);
 
         private bool _proxyMode;
+        private bool _frameBlocked;
+        private string _probeSummary = string.Empty;
         private int _probing;
         private DateTime _probedUtc = DateTime.MinValue;
 
@@ -69,6 +75,8 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 Plugin.Instance.ConfigurationChanged += (_, _) =>
                 {
                     _proxyMode = false;
+                    _frameBlocked = false;
+                    _probeSummary = string.Empty;
                     _probedUtc = DateTime.MinValue;
                     StartProbe();
                 };
@@ -82,21 +90,49 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         public static string PublicJellyfinHostName => PublicJellyfinHost;
 
+        private static bool AssumeRelay => Plugin.Instance?.Configuration.AssumeRelay == true;
+
         /// <summary>
-        /// True when Seerr's public host forwards /SeerrSearch/ to this server. The answer comes from a
-        /// probe that runs in the background (at start, after a configuration change and every ten minutes):
+        /// True when Seerr's public host forwards /SeerrSearch/ to this server (or the administrator says so). The answer
+        /// comes from a probe that runs in the background (at start, after a configuration change and every ten minutes):
         /// a request never waits for it, even if the public host is slow or unreachable from the server.
         /// </summary>
         public bool ProxyMode
         {
             get
             {
-                if (DateTime.UtcNow - _probedUtc >= ProbeTtl)
+                if (AssumeRelay)
                 {
-                    StartProbe();
+                    return !string.IsNullOrEmpty(PublicSeerrHost);
                 }
 
+                RefreshIfStale();
                 return _proxyMode;
+            }
+        }
+
+        /// <summary>
+        /// True when the reverse proxy in front of Seerr sends a header that forbids showing Seerr inside a frame of
+        /// another origin (X-Frame-Options, or a CSP frame-ancestors that excludes Jellyfin): the client then opens Seerr
+        /// in a tab instead of a blank frame. False when unknown.
+        /// </summary>
+        public bool FrameBlocked
+        {
+            get
+            {
+                RefreshIfStale();
+                return _frameBlocked;
+            }
+        }
+
+        /// <summary>What the last probe of Seerr's public address saw: "present", "absent (404)", "unreachable (dns)"…, empty if none yet.</summary>
+        public string ProbeSummary => _probeSummary;
+
+        private void RefreshIfStale()
+        {
+            if (DateTime.UtcNow - _probedUtc >= ProbeTtl)
+            {
+                StartProbe();
             }
         }
 
@@ -132,32 +168,113 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             if (url == UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl))
             {
-                _proxyMode = result;
+                _proxyMode = result.Relay;
+                _frameBlocked = result.FrameBlocked;
+                _probeSummary = result.Summary;
                 _probedUtc = DateTime.UtcNow;
             }
         }
 
-        private async Task<bool> ProbeAsync(string publicUrl)
+        private sealed record ProbeResult(bool Relay, bool FrameBlocked, string Summary);
+
+        private async Task<ProbeResult> ProbeAsync(string publicUrl)
         {
             if (string.IsNullOrEmpty(publicUrl))
             {
-                return false;
+                return new ProbeResult(false, false, string.Empty);
             }
+
+            var relay = false;
+            var summary = "absent";
 
             try
             {
                 var client = _httpClientFactory.CreateClient(SeerrClient.NamedClient);
                 client.Timeout = TimeSpan.FromSeconds(8);
-                client.MaxResponseContentBufferSize = 4096;
-                var body = await client.GetStringAsync(publicUrl + "/" + Plugin.PluginRoute + "/ping").ConfigureAwait(false);
-                var ok = body.Trim() == PingBody;
-                _logger.LogInformation("Seerr Search: /SeerrSearch/ relay on Seerr's host is {State}.", ok ? "present" : "absent");
-                return ok;
+
+                // Headers first, then only the first bytes: Seerr's 404 page is large and must not make the probe fail.
+                using var ping = await client.GetAsync(publicUrl + "/" + Plugin.PluginRoute + "/ping", System.Net.Http.HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                var body = string.Empty;
+                if (ping.IsSuccessStatusCode)
+                {
+                    using var stream = await ping.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                    var buffer = new byte[64];
+                    var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length)).ConfigureAwait(false);
+                    body = System.Text.Encoding.UTF8.GetString(buffer, 0, read).Trim();
+                }
+
+                relay = body == PingBody;
+                summary = relay ? "present" : "absent (" + (int)ping.StatusCode + ")";
+                _logger.LogInformation("Seerr Search: /SeerrSearch/ relay on Seerr's host is {State}.", relay ? "present" : "absent");
+            }
+            catch (TaskCanceledException)
+            {
+                summary = "unreachable (timeout)";
+                _logger.LogInformation("Seerr Search: could not probe {Host}: timeout.", UrlUtil.HostPort(publicUrl));
+                return new ProbeResult(false, false, summary);
+            }
+            catch (Exception ex)
+            {
+                var kind = ex is System.Net.Http.HttpRequestException ? SeerrClient.Classify(ex) : "network";
+                summary = "unreachable (" + kind + ")";
+                _logger.LogInformation("Seerr Search: could not probe {Host}: {Kind}.", UrlUtil.HostPort(publicUrl), kind);
+                return new ProbeResult(false, false, summary);
+            }
+
+            // Does the front of Seerr forbid being framed? Only a header that is actually seen counts as a "yes".
+            var blocked = false;
+            try
+            {
+                var client = _httpClientFactory.CreateClient(SeerrClient.NamedClient);
+                client.Timeout = TimeSpan.FromSeconds(8);
+                using var page = await client.GetAsync(publicUrl + "/login", System.Net.Http.HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+                blocked = ForbidsFraming(page.Headers, page.Content.Headers, UrlUtil.Normalize(Plugin.Instance?.Configuration.JellyfinPublicUrl));
             }
             catch (Exception)
             {
+                // Unknown: keep today's behavior (frame).
+            }
+
+            return new ProbeResult(relay, blocked, summary);
+        }
+
+        private static bool ForbidsFraming(
+            System.Net.Http.Headers.HttpResponseHeaders headers,
+            System.Net.Http.Headers.HttpContentHeaders contentHeaders,
+            string jellyfinOrigin)
+        {
+            if (headers.Contains("X-Frame-Options") || contentHeaders.Contains("X-Frame-Options"))
+            {
+                return true;
+            }
+
+            if (!headers.TryGetValues("Content-Security-Policy", out var policies))
+            {
                 return false;
             }
+
+            foreach (var policy in policies)
+            {
+                foreach (var directive in policy.Split(';'))
+                {
+                    var parts = directive.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length == 0 || !string.Equals(parts[0], "frame-ancestors", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var allowed = parts.Skip(1).Any(p =>
+                        p == "*"
+                        || (jellyfinOrigin.Length > 0 && string.Equals(p.TrimEnd('/'), jellyfinOrigin, StringComparison.OrdinalIgnoreCase)));
+
+                    if (!allowed)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         public sealed record Ticket(Guid UserId, string To, DateTime ExpiresUtc);
@@ -168,7 +285,12 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
         private static string PublicSeerrHost => HostOf(Plugin.Instance?.Configuration.SeerrPublicUrl);
 
-        /// <summary>Parent domain shared by the two public hosts, or empty when automatic sign-in is not possible.</summary>
+        /// <summary>True when both public addresses are on the same host (they only differ by port or path).</summary>
+        public static bool SameHost =>
+            !string.IsNullOrEmpty(PublicJellyfinHost)
+            && string.Equals(PublicJellyfinHost, PublicSeerrHost, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Parent domain shared by two different public hosts, or empty when there is none (or an address is a bare IP).</summary>
         public static string CookieDomain
         {
             get
@@ -183,7 +305,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
                 if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
                 {
-                    return a;
+                    return string.Empty;
                 }
 
                 var la = a.Split('.').Reverse().ToArray();
@@ -199,9 +321,10 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
             SeerrClient.IsConfigured
             && _quickConnect.IsEnabled
             && !string.IsNullOrEmpty(PublicSeerrHost)
-            && (ProxyMode || (!string.IsNullOrEmpty(CookieDomain) && !string.IsNullOrEmpty(PublicJellyfinHost)));
+            && (ProxyMode || (!string.IsNullOrEmpty(PublicJellyfinHost) && (SameHost || !string.IsNullOrEmpty(CookieDomain))));
 
-        public string Mode => !IsReady ? "off" : ProxyMode ? "proxy" : "domain";
+        /// <summary>"proxy" (relay on Seerr's host), "samehost", "domain", or "off".</summary>
+        public string Mode => !IsReady ? "off" : ProxyMode ? "proxy" : SameHost ? "samehost" : "domain";
 
         /// <summary>
         /// Why automatic sign-in is not available, as a stable code (translated by the
@@ -234,7 +357,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 return "jellyfin-url-missing";
             }
 
-            if (string.IsNullOrEmpty(CookieDomain))
+            if (!SameHost && string.IsNullOrEmpty(CookieDomain))
             {
                 return "no-common-domain";
             }
@@ -324,19 +447,34 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
                 return Fail("Seerr refused the session (" + (int)auth.StatusCode + "): " + (auth.AsNode()?["message"]?.GetValue<string>() ?? "no detail"));
             }
 
-            var sessionCookie = auth.SetCookies.FirstOrDefault(c => c.Contains('=', StringComparison.Ordinal));
+            // The session cookie, not the CSRF ones Seerr may also hand out.
+            var sessionCookie = auth.SetCookies.FirstOrDefault(c => c.StartsWith("connect.sid=", StringComparison.Ordinal))
+                ?? auth.SetCookies.FirstOrDefault(c => c.Contains('=', StringComparison.Ordinal)
+                    && !c.StartsWith("_csrf=", StringComparison.Ordinal)
+                    && !c.StartsWith("XSRF-TOKEN=", StringComparison.Ordinal));
             if (sessionCookie == null)
             {
                 return Fail("Seerr did not return a session cookie.");
             }
 
             var nameValue = sessionCookie.Split(';', 2)[0].Trim();
-            var secure = UrlUtil.Normalize(Plugin.Instance?.Configuration.SeerrPublicUrl).StartsWith("https", StringComparison.OrdinalIgnoreCase);
+            var config = Plugin.Instance?.Configuration;
+            var seerrIsHttps = UrlUtil.Normalize(config?.SeerrPublicUrl).StartsWith("https:", StringComparison.OrdinalIgnoreCase);
+            var relay = ProxyMode;
+
+            // The cookie is set by the host the browser is talking to when it redeems the ticket: Seerr's in relay mode,
+            // Jellyfin's otherwise. "Secure" only if that host is reached over https (a browser drops a Secure cookie set
+            // over plain http) AND Seerr itself is over https (a Secure cookie is never sent to a plain-http Seerr).
+            var settingIsHttps = UrlUtil.Normalize(relay ? config?.SeerrPublicUrl : config?.JellyfinPublicUrl)
+                .StartsWith("https:", StringComparison.OrdinalIgnoreCase);
+            var secure = settingIsHttps && seerrIsHttps;
 
             // Relay mode: host cookie, exactly as Seerr would set it.
+            // Same-host mode: host cookie too (no Domain), which the browser also sends to Seerr's port.
             // Domain mode: parent-domain cookie, so that it travels to Seerr.
+            var domain = !relay && !SameHost ? CookieDomain : string.Empty;
             var header = nameValue
-                + (ProxyMode ? string.Empty : "; Domain=" + CookieDomain)
+                + (domain.Length > 0 ? "; Domain=" + domain : string.Empty)
                 + "; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax"
                 + (secure ? "; Secure" : string.Empty);
 

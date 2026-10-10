@@ -439,7 +439,11 @@
     }
 
     function canEmbedSeerr() {
+        // https page + https Seerr (a plain-http frame inside an https page is blocked), same site, and a Seerr whose
+        // proxy does not forbid being framed (X-Frame-Options / frame-ancestors seen by the server): otherwise a tab.
         return Boolean(config && config.seerrHost)
+            && !config.frameBlocked
+            && String(config.publicUrl || '').toLowerCase().indexOf('https:') === 0
             && window.location.protocol === 'https:'
             && !/^[0-9.]+$/.test(window.location.hostname)
             && sameSite(window.location.hostname, config.seerrHost);

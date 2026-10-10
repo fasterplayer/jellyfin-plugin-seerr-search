@@ -29,6 +29,12 @@ namespace Jellyfin.Plugin.SeerrSearch.Configuration
         /// <summary>Seerr API key (Settings → General → API Key). Never leaves the server.</summary>
         public string ApiKey { get; set; } = string.Empty;
 
+        /// <summary>
+        /// The administrator states that the reverse proxy in front of Seerr forwards /SeerrSearch/ to Jellyfin.
+        /// The plugin then skips the detection (useful when the Jellyfin server cannot reach its own public address).
+        /// </summary>
+        public bool AssumeRelay { get; set; }
+
         /// <summary>Turns the script injection and the calls to Seerr on or off.</summary>
         public bool Enabled { get; set; } = true;
 
@@ -68,7 +74,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Configuration
         /// <summary>Normalizes the values an administrator can type, so that bad input is never used.</summary>
         public void Sanitize()
         {
-            SeerrUrl = UrlUtil.Normalize(SeerrUrl);
+            SeerrUrl = UrlUtil.NormalizeSeerr(SeerrUrl);
             SeerrPublicUrl = UrlUtil.Normalize(SeerrPublicUrl);
             JellyfinPublicUrl = UrlUtil.Normalize(JellyfinPublicUrl);
             ApiKey = (ApiKey ?? string.Empty).Trim();

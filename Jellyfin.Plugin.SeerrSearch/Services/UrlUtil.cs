@@ -40,5 +40,44 @@ namespace Jellyfin.Plugin.SeerrSearch.Services
 
             return value.TrimEnd('/');
         }
+
+        /// <summary>
+        /// The Seerr address: like <see cref="Normalize"/>, and a trailing "/api/v1" (people paste the API address
+        /// from the Seerr documentation) is dropped, since the plugin adds it itself.
+        /// </summary>
+        public static string NormalizeSeerr(string? raw)
+        {
+            var value = Normalize(raw);
+
+            foreach (var suffix in new[] { "/api/v1", "/api" })
+            {
+                if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = value[..^suffix.Length].TrimEnd('/');
+                    break;
+                }
+            }
+
+            return value;
+        }
+
+        /// <summary>"host:port" of a URL, for messages shown to the administrator (never credentials or paths).</summary>
+        public static string HostPort(string? url)
+        {
+            return Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                ? (uri.IsDefaultPort ? uri.Host : uri.Host + ":" + uri.Port)
+                : string.Empty;
+        }
+
+        /// <summary>True for localhost / loopback addresses: seen from a Docker container, that is the container itself.</summary>
+        public static bool IsLoopback(string? url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                return false;
+            }
+
+            return uri.IsLoopback || string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }

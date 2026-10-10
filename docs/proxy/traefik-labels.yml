@@ -1,0 +1,28 @@
+# Seerr Search - Traefik v3, Docker labels (add them to the containers you already have).
+# Replace the host names; keep your own entrypoint / certificate resolver names (websecure / letsencrypt here).
+# Traefik passes the original Host header to the backend by default.
+services:
+  jellyfin:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.jellyfin.rule=Host(`jellyfin.example.com`)
+      - traefik.http.routers.jellyfin.entrypoints=websecure
+      - traefik.http.routers.jellyfin.tls.certresolver=letsencrypt
+      - traefik.http.routers.jellyfin.service=jellyfin
+      - traefik.http.services.jellyfin.loadbalancer.server.port=8096
+      # The only router that is specific to Seerr Search: on Seerr's host, /SeerrSearch/ goes to JELLYFIN.
+      # The explicit priority makes it win over the plain Seerr router below.
+      - traefik.http.routers.seerr-relay.rule=Host(`seerr.example.com`) && PathPrefix(`/SeerrSearch/`)
+      - traefik.http.routers.seerr-relay.priority=100
+      - traefik.http.routers.seerr-relay.entrypoints=websecure
+      - traefik.http.routers.seerr-relay.tls.certresolver=letsencrypt
+      - traefik.http.routers.seerr-relay.service=jellyfin
+
+  seerr:
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.seerr.rule=Host(`seerr.example.com`)
+      - traefik.http.routers.seerr.entrypoints=websecure
+      - traefik.http.routers.seerr.tls.certresolver=letsencrypt
+      - traefik.http.routers.seerr.service=seerr
+      - traefik.http.services.seerr.loadbalancer.server.port=5055

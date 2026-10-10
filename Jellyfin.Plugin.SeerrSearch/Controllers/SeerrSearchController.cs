@@ -135,6 +135,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 sso = _sso.IsReady,
                 ssoMode = _sso.Mode,
                 seerrHost = SeerrSso.PublicSeerrHostName,
+                frameBlocked = _sso.FrameBlocked,
                 showSeerrLink = config.ShowSeerrLink || _sso.IsReady,
                 language = config.Language ?? string.Empty
             });
@@ -350,17 +351,33 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return new JsonResult(new { ok = false, error = "not-configured" });
             }
 
+            var seerrUrl = UrlUtil.NormalizeSeerr(Plugin.Instance?.Configuration.SeerrUrl);
+            var hostPort = UrlUtil.HostPort(seerrUrl);
+            var loopback = UrlUtil.IsLoopback(seerrUrl);
+
             var status = await _seerr.GetAsync("/status", null, ct).ConfigureAwait(false);
-            if (!status.IsSuccess)
+            var problem = DescribeProblem(status);
+            if (problem != null)
             {
-                return new JsonResult(new { ok = false, error = "unreachable", code = (int)status.StatusCode });
+                return new JsonResult(new
+                {
+                    ok = false,
+                    error = problem,
+                    code = status.Failure == null ? (int)status.StatusCode : 0,
+                    host = hostPort,
+                    loopback,
+                    location = SafeLocation(status.Location, seerrUrl)
+                });
             }
 
             // /status is public in Seerr: check the key too, with a call that needs it.
             var users = await _seerr.GetAsync("/user?take=1", null, ct).ConfigureAwait(false);
             if (!users.IsSuccess)
             {
-                return new JsonResult(new { ok = false, error = "bad-key", code = (int)users.StatusCode });
+                var keyProblem = users.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    ? "bad-key"
+                    : DescribeProblem(users) ?? "http-error";
+                return new JsonResult(new { ok = false, error = keyProblem, code = users.Failure == null ? (int)users.StatusCode : 0, host = hostPort, loopback, location = SafeLocation(users.Location, seerrUrl) });
             }
 
             // The test button should show the real answer, not the one cached from before the last change.
@@ -380,8 +397,68 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 unlinkedUsers = unlinked,
                 sso = _sso.IsReady,
                 ssoMode = _sso.Mode,
-                ssoReason = _sso.WhyNotReady()
+                ssoReason = _sso.WhyNotReady(),
+                ssoProbe = _sso.ProbeSummary,
+                ssoPublicHost = SeerrSso.PublicSeerrHostName,
+                frameBlocked = _sso.FrameBlocked
             });
+        }
+
+        /// <summary>
+        /// What is wrong with an answer to <c>GET /status</c>, as a stable code for the configuration page, or null when
+        /// it looks like Seerr. A connection that failed outright is "net-dns", "net-refused", "net-timeout", "net-tls"
+        /// or "net-network".
+        /// </summary>
+        private static string? DescribeProblem(SeerrClient.SeerrResponse response)
+        {
+            if (response.Failure != null)
+            {
+                return "net-" + response.Failure;
+            }
+
+            var code = (int)response.StatusCode;
+
+            if (code is >= 300 and < 400)
+            {
+                return "redirect";
+            }
+
+            if (code is 401 or 403)
+            {
+                return "blocked";
+            }
+
+            if (code == 404)
+            {
+                return "not-found";
+            }
+
+            if (code >= 500)
+            {
+                return "server-error";
+            }
+
+            if (code is < 200 or >= 300)
+            {
+                return "http-error";
+            }
+
+            return SafeString(response.AsNode()?["version"]) == null ? "not-seerr" : null;
+        }
+
+        /// <summary>Where a redirect leads, without its query string, for the message shown to the administrator.</summary>
+        private static string? SafeLocation(string? location, string baseUrl)
+        {
+            if (string.IsNullOrWhiteSpace(location))
+            {
+                return null;
+            }
+
+            var absolute = Uri.TryCreate(location, UriKind.Absolute, out var uri)
+                ? uri
+                : Uri.TryCreate(new Uri(baseUrl + "/"), location, out var relative) ? relative : null;
+
+            return absolute == null ? null : absolute.GetLeftPart(UriPartial.Path);
         }
 
         /// <summary>Imports the Jellyfin accounts that are not in Seerr yet (administrators only), then reloads the map.</summary>
@@ -491,7 +568,7 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
                 return Redirect(loginPage);
             }
 
-            if (!string.Equals(Request.Host.Host, expectedUri.Host, StringComparison.OrdinalIgnoreCase))
+            if (!HostMatches(expectedUri.Host))
             {
                 if (hop == 0 && _sso.Peek(t))
                 {
@@ -518,6 +595,30 @@ namespace Jellyfin.Plugin.SeerrSearch.Controllers
             Response.Headers.CacheControl = "no-store";
 
             return Redirect(seerrPublic + ticket.To);
+        }
+
+        /// <summary>
+        /// Whether the browser reached us through the expected host name. A reverse proxy that does not pass the original
+        /// Host header (proxy_pass without proxy_set_header Host) still tells us in X-Forwarded-Host, most of the time.
+        /// Being wrong here costs nothing: the user simply lands on Seerr's own sign-in page.
+        /// </summary>
+        private bool HostMatches(string expectedHost)
+        {
+            if (string.Equals(Request.Host.Host, expectedHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            var forwarded = Request.Headers["X-Forwarded-Host"].ToString().Split(',')[0].Trim();
+            if (forwarded.Length == 0)
+            {
+                return false;
+            }
+
+            var colon = forwarded.LastIndexOf(':');
+            var name = colon > 0 && !forwarded.EndsWith(']') ? forwarded[..colon] : forwarded;
+
+            return string.Equals(name.Trim('[', ']'), expectedHost.Trim('[', ']'), StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<int?> ResolveSeerrUserIdAsync(CancellationToken ct)
